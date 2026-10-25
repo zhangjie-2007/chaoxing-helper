@@ -12,18 +12,19 @@
 
 1. 打开 `edge://extensions`（Chrome 是 `chrome://extensions`）。
 2. 右上角打开 **开发人员模式**。
-3. 点 **加载解压缩的扩展**，选择这个文件夹：
+3. 把仓库下载下来（`Code` → `Download ZIP`，或 `git clone`），解压到任意目录。
+4. 点 **加载解压缩的扩展**，选**包含 `manifest.json` 的那一层目录**（不是它的上级）：
 
    ```
-   D:\大肥鱼工作点\chaoxing-helper
+   chaoxing-helper/
+   ├─ manifest.json   ← 这一层
+   ├─ icons/
+   └─ src/
    ```
 
-4. 打开课程页，**刷新一次**（content script 只在页面加载时挂载）：
+5. 打开学习通课程页，**刷新一次**（content script 只在页面加载时挂载）。
 
-   - 学习通：`mooc1.chaoxing.com` / `*.chaoxing.com` 的课程学习页
-   - 智慧树：`studyvideoh5.zhihuishu.com` 的课程学习页
-
-5. 点工具栏上的橙色图标，能弹出面板就说明装好了。
+6. 点工具栏上的橙色图标，能弹出面板就说明装好了。
 
 > 更新代码后，回 `edge://extensions` 点该扩展的"刷新"按钮，再刷新课程页。
 
@@ -40,9 +41,9 @@
 被抓之后会被直接踢回智慧树首页。从代码角度看，暴露点在：
 
 - 主世界挂过 window.__cxMainHook 这类全局变量（页面一句 if (window.__cxMainHook) 就能发现）
-- 重写了 pause / ddEventListener / document.hidden，但没伪装 Function.prototype.toString，pause.toString() 一眼能看出不是原生
+- 重写了 pause / addEventListener / document.hidden，但没伪装 Function.prototype.toString，pause.toString() 一眼能看出不是原生
 - 包装 XHR 时在实例上挂了 __cxUrl 这类字段
-- 自动答题/点继续用的是 el.click() 和合成事件，event.isTrusted === false
+- 自动答题/点「继续」用的是 el.click() 和合成事件，event.isTrusted === false
 
 **v1.2.0 已经去掉了智慧树支持**，并把前三条暴露点在主世界修掉了（见下面实现要点里的隐蔽性一节）。第四条天然做不到——JS 造不出 isTrusted === true 的事件，所以自动点选永远是理论上的破绽，学习通这边也别长时间无人值守跑。
 
