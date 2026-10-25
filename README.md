@@ -1,0 +1,200 @@
+# 学习通助手 · CX Helper
+
+一个 Edge / Chrome 扩展（Manifest V3），解决刷学习通网课时的三件烦事：
+
+1. **鼠标移出页面视频就暂停** → 伪造成"页面一直可见、一直有焦点"，把反作弊的暂停信号掐掉，并且定时兜底续播。
+2. **视频中途弹选择题** → 识别单选题 / 多选题，自动选对并提交（大模型或自己的题库）。
+3. **看完一节要手点下一节** → 视频播完自动跳下一个未完成小节；遇到"暂无内容"的空章节会自动跳过。
+
+---
+
+## 安装（30 秒）
+
+1. 打开 `edge://extensions`（Chrome 是 `chrome://extensions`）。
+2. 右上角打开 **开发人员模式**。
+3. 点 **加载解压缩的扩展**，选择这个文件夹：
+
+   ```
+   D:\大肥鱼工作点\chaoxing-helper
+   ```
+
+4. 打开课程页，**刷新一次**（content script 只在页面加载时挂载）：
+
+   - 学习通：`mooc1.chaoxing.com` / `*.chaoxing.com` 的课程学习页
+   - 智慧树：`studyvideoh5.zhihuishu.com` 的课程学习页
+
+5. 点工具栏上的橙色图标，能弹出面板就说明装好了。
+
+> 更新代码后，回 `edge://extensions` 点该扩展的"刷新"按钮，再刷新课程页。
+
+---
+
+## 为什么没有做智慧树
+
+试过（v1.1.0 里加过 *.zhihuishu.com），但智慧树的检测比学习通狠，实测被当场抓了：
+
+`
+检测到异常脚本，为保证您的正常学习进度，请您关闭插件后，回到学堂重新进入视频学习页正常学习
+`
+
+被抓之后会被直接踢回智慧树首页。从代码角度看，暴露点在：
+
+- 主世界挂过 window.__cxMainHook 这类全局变量（页面一句 if (window.__cxMainHook) 就能发现）
+- 重写了 pause / ddEventListener / document.hidden，但没伪装 Function.prototype.toString，pause.toString() 一眼能看出不是原生
+- 包装 XHR 时在实例上挂了 __cxUrl 这类字段
+- 自动答题/点继续用的是 el.click() 和合成事件，event.isTrusted === false
+
+**v1.2.0 已经去掉了智慧树支持**，并把前三条暴露点在主世界修掉了（见下面实现要点里的隐蔽性一节）。第四条天然做不到——JS 造不出 isTrusted === true 的事件，所以自动点选永远是理论上的破绽，学习通这边也别长时间无人值守跑。
+
+---
+
+## 先配一件事：答题要有个"大脑"
+
+插件本身不会做题，得给它一个来源（二选一或都配）。点面板里的 **设置**：
+
+### 方式 A：大模型（推荐，准确率高）
+
+- 接口地址：`https://api.deepseek.com/chat/completions`（默认已填）
+- 模型名：`deepseek-chat`
+- API Key：去 [platform.deepseek.com](https://platform.deepseek.com) 申请，`sk-` 开头
+
+填完点 **测试连接**，看到"连接成功，测试题答：A"就通了。
+
+任何 OpenAI 兼容网关都能用（one-api、硅基流动、自建代理等），只改地址和模型名即可。
+
+> API Key 只存在 `chrome.storage.local`（本机），不同步到云端账号。
+
+### 方式 B：本地题库（免费，要先攒题）
+
+设置页把题和答案贴进去，一行一条：
+
+```
+存储器是计算机中用来存放程序和数据的部件？ => A
+CPU 由哪些部分组成？ => ABC
+操作系统的主要功能 | 进程管理、内存管理
+```
+
+- 多选写 `ABC` 或 `A,C`，也可以用数组 `[0,2]`
+- 支持 JSON：`[{"q":"题目","a":"B"}]`
+- **模糊匹配**：题干差几个字、多了"（单选）"之类也能认出来（相似度 ≥ 0.8）
+- 题库优先于大模型：命中就不调接口，省钱又快
+
+没配任何一个时，插件遇到弹题会在页面上提示"弹题未能自动作答"，需要你手动点。**建议第一次先手动答一道，把题目和答案记进题库**，后面同类题就自动了。
+
+---
+
+## 面板上的开关
+
+| 开关 | 默认 | 说明 |
+| --- | --- | --- |
+| 总开关 | 开 | 关掉等于临时停用 |
+| 鼠标离开继续播放 | 开 | 反挂机核心开关 |
+| 弹题自动作答 | 开 | 识别 + 作答 + 提交 |
+| 播完自动下一节 | 开 | 视频结束自动跳转 |
+| 静音播放 | **关** | 见下方"为什么默认不静音" |
+| 章节测验自动填 | 关 | 整章测验，风险高，默认不碰 |
+
+倍速默认「跟随页面」——插件不碰 `playbackRate`，你在页面里设的速度、或 Global Speed 这类扩展设的速度都保持原样。想强制一个固定速度就在面板里选 1.0×~2.0×（选了就会每 1.2 秒纠正一次）。**建议不要超过 1.5×**，学习通后台会记录播放速率，2 倍速连续刷是有痕迹的。
+
+---
+
+## 实现要点（想改代码时看这里）
+
+两个世界协同，`src/main-hook.js` 在页面主世界里做事，`src/content.js` 在隔离世界做判断：
+
+**反挂机（main-hook.js）**
+
+- 把 `document.hidden / visibilityState / webkitHidden` 等全部改写成"可见"，`document.hasFocus()` 恒为 `true`
+- window 捕获阶段 `stopImmediatePropagation` 掉 `visibilitychange`、`pagehide`、窗口 `blur`，以及"鼠标真离开文档"的 `mouseout/mouseleave`（`relatedTarget` 为空才算离开，页面内部移动一律放行，不破坏目录 hover）
+- 重写 `EventTarget.prototype.addEventListener`，页面级再想注册这些监听直接被拒
+- 重写 `HTMLMediaElement.prototype.pause`：**距上一次真实点击 ≥800ms 就吞掉这次暂停**（所以你手动按暂停照样有效），并在下一帧把播放拉回来
+- 每 `resumeInterval`（默认 1200ms）巡检：`paused && !ended && 可见` → 重新 `play()`
+
+**弹题作答（content.js + background.js）**
+
+- 每 2.4s 扫描一次页面：先试已知容器（`.ans-videoquiz`、`.questionLayer`、`.topic-question` 等），再兜底"从单选框往上找最小的多选容器"；容器还要过一道 `looksLikeQuiz` 过滤（要有提交按钮 / 题目标题 / "单选题"字样），避免把匿名评论表单当题目
+- 题干取标题选择器，退化为"全文减去选项开头"；选项取 `label` 或最近的单选项父节点
+- 答案由 service worker 给出：题库模糊匹配 → 大模型（`temperature=0`、`response_format=json_object`、30s 超时、网关不认 `response_format` 时自动去掉重试一次）
+- 单选只取第一个答案（点第二个会把第一个顶掉），多选全点；有提交按钮就点，没有就按"点选即判定"处理
+- 同一道题 10 分钟内不重复作答（题干+选项哈希去重）
+
+**自动下一节（content.js）**
+
+- `ended` 事件 + `timeupdate` 进度兜底（`currentTime >= duration - 0.35`）双保险，帧内视频通过 `postMessage` 通知顶层
+- 顶层**先走章节目录**：按"当前项 → 后面第一个未完成项"，并做两道过滤——① 章标题（"5 Python语言基本语法"，编号 depth=1）不算小节，要选 `5.1` 这种 depth≥2 的；② 点完必须验证 `chapterId` 或 URL 真的变了，变了才算成功
+- 目录点了没反应时，按目标的 `chapterId` 直接换地址兜底（学习通认这种 URL）
+- 目录一个都没找到时会先把目录面板打开再重试；实在点不动就在日志里写明原因，**不再谎报成功**
+- 空章节（页面只有"暂无内容"，既没视频也没题目）不会触发任何事件，所以每 6s 主动检测一次，连续两次判定为空就自动跳到下一节
+- 等待 `nextDelay`（默认 3000ms）再跳，因为站点要先把本节观看进度上报完；跳太快进度可能丢
+
+**弹题后的遮挡层（content.js）**
+
+- 答完题学习通会挂一层绿色的"恭喜你，答对了…"遮罩，只有一个「继续学习」按钮，不点视频就一直是暂停状态
+- 每约 4.8s 检查一次：**只有视频确实处于暂停且没播完**时，才去找 `继续学习/继续播放/继续观看/继续/知道了/我知道了` 这类按钮点掉（顶层没有 video 时用子框架上报的暂停状态判断），不会乱点"确定"把章测提交掉
+
+---
+
+## 认不出题目怎么办
+
+1. 在弹题出现时点面板的 **识别当前题目**，运行日志会写诊断：本框架有多少个单/多选框、容器的 class 链是什么。
+2. 把题目容器的 CSS 选择器填到设置页的 **自定义题目容器选择器**（一行一个）。
+3. 如果日志写"本框架没有 radio/checkbox"，说明题目在别的 iframe 里：插件对所有框架都注入了，等 2~3 秒它会自己扫到；跨域框架收不到手动扫描指令，但定时扫描照常。
+
+F12 控制台里也可以用 `__cx.collectStatus()` 看状态、`__cx.scanQuiz(true)` 手动扫一次。
+
+---
+
+## 为什么默认不静音
+
+浏览器会降频（throttle）后台标签页的定时器，但**正在发声的页面不会被降频**。默认不静音，就是为了让 `play()` 兜底巡检和进度检测保持准点。你要是嫌吵，可以静音，代价是放后台时定时器可能被拉长到 1 秒以上，续播会慢一点。
+
+---
+
+## 已知限制（别指望它 100%）
+
+- 站点改版、换播放器、DOM 结构变了，容器选择器就可能失效 —— 用上面的诊断流程补规则。
+- 智慧树那边我只按公开的页面结构做了适配，**没在真实弹题上验证过**，第一次遇到请用「识别当前题目」把日志发我。
+- 弹题如果限时且答案错误会**锁死本节**，所以大模型也可能答错（它看不到教材上下文）。想稳，就先用题库把已经遇到的题攒起来。
+- 只处理"视频弹题"和（可选的）"章节测验"，不碰考试、讨论、签到、作业。
+- 插件不改课程进度上报接口，纯 UI 操作，所以进度是真实播放出来的。
+
+## 风险提示
+
+自动化刷课可能违反学校/平台的使用规则，账号被判定异常由使用者自负。建议：
+
+- 倍速 ≤1.5×，别整夜无人值守跑完一整门课
+- 别用来应付要计分的正式考试
+- 弹题自动作答偶尔会错，重要的课自己看一眼
+
+---
+
+## 目录结构
+
+```
+chaoxing-helper/
+├─ manifest.json          MV3 清单（学习通 + 智慧树）
+├─ icons/                 16/32/48/128 图标（tools/make_icons.py 生成）
+├─ src/
+│  ├─ main-hook.js        主世界：反挂机、拦 pause、兜底续播、静音起播、上报探测
+│  ├─ content.js          隔离世界：弹题扫描、自动下一节、空章节跳过、自动起播、面板通信
+│  ├─ content.css         页面内提示条
+│  ├─ background.js       service worker：题库 + 大模型答题
+│  ├─ popup.html/css/js   工具栏面板
+│  └─ options.html/js     设置页
+└─ tools/
+   ├─ make_icons.py       重新生成图标
+   ├─ check.js            清单/资源/语法/图标自检
+   ├─ test-background.js  后台逻辑离线自测
+   └─ test-catalog.js     "选下一节"逻辑离线自测
+```
+
+自测（不需要浏览器）：
+
+```powershell
+& "C:\Users\zhangjie\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" `
+  "D:\大肥鱼工作点\chaoxing-helper\tools\check.js"
+& "C:\Users\zhangjie\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" `
+  "D:\大肥鱼工作点\chaoxing-helper\tools\test-background.js"
+& "C:\Users\zhangjie\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" `
+  "D:\大肥鱼工作点\chaoxing-helper\tools\test-catalog.js"
+```

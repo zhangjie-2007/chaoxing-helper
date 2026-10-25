@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>学习通助手 · 设置</title>
+    <style>
+      :root {
+        --bg: #f4f6f8;
+        --card: #fff;
+        --line: rgba(15, 23, 42, 0.09);
+        --text: #10151d;
+        --sub: #7b8494;
+        --accent: #ff8a00;
+        --accent-soft: rgba(255, 138, 0, 0.13);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px 60px;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      .page {
+        max-width: 780px;
+        margin: 0 auto;
+      }
+      header.top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 22px;
+      }
+      .logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 13px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-weight: 700;
+        font-size: 19px;
+        background: linear-gradient(135deg, #ffa02e, #ff7300);
+        box-shadow: 0 8px 18px rgba(255, 122, 0, 0.3);
+      }
+      header.top h1 {
+        margin: 0;
+        font-size: 19px;
+        font-weight: 650;
+      }
+      header.top p {
+        margin: 2px 0 0;
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 1px 2px rgba(16, 21, 29, 0.04);
+      }
+      .card h2 {
+        margin: 0 0 4px;
+        font-size: 15px;
+        font-weight: 650;
+      }
+      .card .desc {
+        margin: 0 0 16px;
+        font-size: 12px;
+        color: var(--sub);
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+      .field > label {
+        font-size: 12px;
+        color: var(--sub);
+      }
+      input[type="text"],
+      input[type="password"],
+      input[type="number"],
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fafbfc;
+        font: inherit;
+        font-size: 13px;
+        color: var(--text);
+        outline: none;
+        transition: 0.16s;
+      }
+      input:focus,
+      textarea:focus {
+        border-color: rgba(255, 138, 0, 0.65);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+        background: #fff;
+      }
+      textarea {
+        min-height: 180px;
+        resize: vertical;
+        font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      .row-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        padding: 9px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 550;
+        cursor: pointer;
+        transition: 0.16s;
+      }
+      button:hover {
+        background: #f4f6f9;
+      }
+      button.primary {
+        border: none;
+        color: #fff;
+        background: linear-gradient(135deg, #ffa02e, #ff7300);
+        box-shadow: 0 6px 14px rgba(255, 122, 0, 0.28);
+      }
+      button.primary:hover {
+        filter: brightness(1.05);
+      }
+      .result {
+        font-size: 12px;
+        padding: 8px 12px;
+        border-radius: 9px;
+        background: #f4f6f9;
+        color: var(--sub);
+        max-width: 100%;
+        overflow-x: auto;
+      }
+      .result.ok {
+        background: rgba(23, 132, 90, 0.1);
+        color: #147a52;
+      }
+      .result.err {
+        background: rgba(194, 65, 12, 0.1);
+        color: #b23c07;
+      }
+      code {
+        background: #f1f3f6;
+        padding: 1px 5px;
+        border-radius: 5px;
+        font-size: 12px;
+      }
+      ol.steps {
+        margin: 0;
+        padding-left: 20px;
+        font-size: 12.5px;
+        color: #465061;
+      }
+      ol.steps li {
+        margin-bottom: 6px;
+      }
+      .tip {
+        font-size: 12px;
+        color: var(--sub);
+        background: #fbfcfd;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        line-height: 1.7;
+      }
+      .savebar {
+        position: sticky;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px;
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(10px);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: 0 -6px 24px rgba(16, 21, 29, 0.06);
+      }
+      .saved {
+        font-size: 12px;
+        color: #147a52;
+        opacity: 0;
+        transition: 0.2s;
+      }
+      .saved.show {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="top">
+        <span class="logo">超</span>
+        <div>
+          <h1>学习通助手 · 设置</h1>
+          <p>答对弹题靠大模型或你自己的题库，两者至少要配一个。</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>答题来源：大模型</h2>
+        <p class="desc">兼容 OpenAI 接口格式。默认 DeepSeek，也可以换成任何 OpenAI 兼容网关。</p>
+
+        <div class="field">
+          <label>接口地址</label>
+          <input type="text" id="endpoint" placeholder="https://api.deepseek.com/chat/completions" />
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>模型名</label>
+            <input type="text" id="model" placeholder="deepseek-chat" />
+          </div>
+          <div class="field">
+            <label>API Key（只存在本机）</label>
+            <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="row-actions">
+          <button id="btnTest">测试连接</button>
+          <span id="testResult" class="result" style="display: none"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>答题来源：本地题库</h2>
+        <p class="desc">题库先于大模型匹配，命中就不调用接口（省钱更快）。支持模糊匹配，题目差几个字也能认出来。</p>
+        <div class="field">
+          <label>题库内容</label>
+          <textarea id="bankText" spellcheck="false" placeholder='每行一条，用 => 分隔：&#10;存储器是计算机中的什么部件？ => A&#10;多选用字母连写：CPU 由哪些部分组成？ => ABC'></textarea>
+        </div>
+        <p class="tip">
+          三种写法都认：<br />
+          1. <code>题目 => A</code>（多选写 <code>ABC</code> 或 <code>A,C</code>）<br />
+          2. <code>题目 | 正确选项原文</code><br />
+          3. JSON 数组：<code>[{"q":"题目","a":"A"}]</code>，<code>a</code> 也可以是 <code>[0,2]</code>
+        </p>
+        <div class="row-actions" style="margin-top: 12px">
+          <button id="btnBank">检查题库</button>
+          <span id="bankResult" class="result" style="display: none"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>行为微调</h2>
+        <p class="desc">默认值一般就够用，出现异常再动。</p>
+        <div class="grid2">
+          <div class="field">
+            <label>播完到跳转的等待（毫秒）</label>
+            <input type="number" id="nextDelay" min="500" step="500" value="3000" />
+          </div>
+          <div class="field">
+            <label>防暂停巡检间隔（毫秒）</label>
+            <input type="number" id="resumeInterval" min="400" step="100" value="1200" />
+          </div>
+        </div>
+        <p class="tip">
+          跳转等待不要低于 2000ms：站点要把本节观看进度上报完再跳，太快容易被判异常。
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>认不出题目时用这里</h2>
+        <p class="desc">如果弹题出来了但插件没反应，把题目容器的 CSS 选择器加进来。F12 右键题目 → 检查 → 找到外层带题干的 div → 复制它的 class。</p>
+        <div class="field">
+          <label>自定义题目容器选择器（一行一个）</label>
+          <textarea id="quizSelectors" spellcheck="false" style="min-height: 84px" placeholder=".ans-videoquiz-options&#10;#questionLayer"></textarea>
+        </div>
+        <p class="tip">
+          点插件里的「识别当前题目」会把诊断结果写进运行日志（页面上有多少个单/多选框、容器 class 是什么），把日志发我就能针对性加规则。
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>怎么装的</h2>
+        <ol class="steps">
+          <li>打开 <code>edge://extensions</code>，右上角打开「开发人员模式」。</li>
+          <li>点「加载解压缩的扩展」，选择 <code>D:\大肥鱼工作点\chaoxing-helper</code> 这个文件夹。</li>
+          <li>回到学习通课程页，刷新一次页面，插件就会挂上去。</li>
+          <li>改完本页设置后点保存，课程页再刷新一次即生效。</li>
+        </ol>
+      </section>
+
+      <div class="savebar">
+        <button class="primary" id="btnSave">保存设置</button>
+        <button id="btnReset">恢复默认</button>
+        <span class="saved" id="savedTip">已保存</span>
+      </div>
+    </div>
+    <script src="options.js"></script>
+  </body>
+</html>

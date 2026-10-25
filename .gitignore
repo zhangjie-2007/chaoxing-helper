@@ -1,0 +1,14 @@
+# 依赖/构建产物
+node_modules/
+__pycache__/
+*.pyc
+
+# 本地调试产物
+tools/preview/
+*.log
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

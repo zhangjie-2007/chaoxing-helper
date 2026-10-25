@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "学习通助手 · CX Helper",
+  "version": "1.2.0",
+  "description": "鼠标离开页面继续播放、视频弹题自动作答、播完自动跳下一节。仅供超星学习通使用。",
+  "minimum_chrome_version": "111",
+  "permissions": ["storage", "scripting", "activeTab"],
+  "host_permissions": ["*://*/*"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "学习通助手",
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.chaoxing.com/*", "*://*.chaoxing.cn/*"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_start",
+      "world": "MAIN",
+      "js": ["src/main-hook.js"]
+    },
+    {
+      "matches": ["*://*.chaoxing.com/*", "*://*.chaoxing.cn/*"],
+      "all_frames": true,
+      "run_at": "document_idle",
+      "js": ["src/content.js"],
+      "css": ["src/content.css"]
+    }
+  ]
+}

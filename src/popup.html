@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>学习通助手</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="hero">
+        <div class="brand">
+          <span class="logo">超</span>
+          <div class="brand-text">
+            <h1>学习通助手</h1>
+            <p id="pageInfo">正在读取页面…</p>
+          </div>
+        </div>
+        <label class="switch" title="总开关">
+          <input type="checkbox" id="enabled" />
+          <span class="slider"></span>
+        </label>
+      </header>
+
+      <section class="card" id="statusCard">
+        <div class="status-grid">
+          <div class="stat">
+            <span class="stat-label">视频</span>
+            <span class="stat-value" id="statVideo">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">拦截暂停</span>
+            <span class="stat-value" id="statPaused">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">兜底续播</span>
+            <span class="stat-value" id="statResumed">—</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">待答题目</span>
+            <span class="stat-value" id="statQuiz">—</span>
+          </div>
+        </div>
+        <p class="hint" id="pageHint"></p>
+      </section>
+
+      <section class="card rows">
+        <label class="row">
+          <div class="row-text">
+            <span>鼠标离开继续播放</span>
+            <em>伪造成页面常驻可见，掐掉失焦/移出信号</em>
+          </div>
+          <input type="checkbox" class="tgl" id="keepPlaying" />
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <span>弹题自动作答</span>
+            <em>识别视频弹窗里的单选/多选，自动点选并提交</em>
+          </div>
+          <input type="checkbox" class="tgl" id="autoQuiz" />
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <span>播完自动下一节</span>
+            <em>本章视频结束后自动跳到下一个未完成小节</em>
+          </div>
+          <input type="checkbox" class="tgl" id="autoNext" />
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <span>静音播放</span>
+            <em>注意：静音时后台标签页可能被浏览器降频</em>
+          </div>
+          <input type="checkbox" class="tgl" id="mute" />
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <span>章节测验自动填（谨慎）</span>
+            <em>整章测验题，默认关闭，容易被判异常</em>
+          </div>
+          <input type="checkbox" class="tgl" id="autoChapterQuiz" />
+        </label>
+      </section>
+
+      <section class="card two-col">
+        <label class="field">
+          <span>倍速</span>
+          <select id="rate">
+            <option value="0">跟随页面</option>
+            <option value="1">1.0×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="1.75">1.75×</option>
+            <option value="2">2.0×</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>答题来源</span>
+          <select id="solver">
+            <option value="llm">大模型</option>
+            <option value="bank">本地题库</option>
+            <option value="off">不答题</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="actions">
+        <button id="btnNext" class="btn primary">立即下一节</button>
+        <button id="btnScan" class="btn">识别当前题目</button>
+        <button id="btnOptions" class="btn ghost">设置</button>
+      </section>
+
+      <section class="card logs">
+        <div class="logs-head">
+          <span>运行日志</span>
+          <button id="btnClear" class="link">清空</button>
+        </div>
+        <div class="logs-body" id="logBody"></div>
+      </section>
+
+      <footer class="foot">
+        <span id="verInfo">v1.0.0</span>
+        <span>倍速建议 ≤1.5×，过快可能被记录异常</span>
+      </footer>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
