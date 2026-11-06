@@ -1216,7 +1216,57 @@
     return false;
   }
 
-  /** 返回 {empty, why}；why 用来在面板上显示到底哪个条件没满足 */
+  /* ------------------------------------------------------------------ *
+   * 有的小节是"多标签页"结构（学习目标 / 视频 / 章节测验），默认停在
+   * 「学习目标」这种纯文字页上就没有视频可播，也不会触发任何事件。
+   * 这时先替用户点一下「视频」标签；点完还是没有视频、没有题，才当成没内容跳过。
+   * ------------------------------------------------------------------ */
+  const VIDEO_TAB_RE = /^(?:\d+\s*)?视频$/;
+  let videoTabTick = { id: '', tried: '' };
+
+  function videoTabCandidates() {
+    const out = [];
+    try {
+      for (const el of document.querySelectorAll('a, li, div, span')) {
+        if (!visible(el)) continue;
+        const t = cleanText(el.textContent || '');
+        if (!t || t.length > 10) continue;
+        if (!VIDEO_TAB_RE.test(t)) continue;
+        if (el.querySelector('a, button, li')) continue; // 只要最内层
+        out.push(el);
+      }
+    } catch (_) {}
+    return out;
+  }
+
+  function pageHasVideo() {
+    try {
+      for (const v of document.querySelectorAll('video')) {
+        if (visible(v)) return true;
+      }
+    } catch (_) {}
+    const fv = lastFrameState.video;
+    return !!(fv && lastFrameState.at && Date.now() - lastFrameState.at < 15000);
+  }
+
+  /** 学习目标/章测这类"有内容但没有视频"的标签页，帮用户切到「视频」 */
+  function ensureVideoTab() {
+    if (!IS_TOP) return;
+    if (!cfg.enabled || !cfg.autoNext) return;
+    if (pageHasVideo()) return;
+    const cid = currentChapterId() || location.href;
+    if (videoTabTick.id !== cid) videoTabTick = { id: cid, tried: '' };
+    if (videoTabTick.tried === cid) return;
+    const tabs = videoTabCandidates();
+    if (!tabs.length) return;
+    const target = tabs.find((el) => !itemActive(el));
+    if (!target) return; // 已经在视频标签上了
+    videoTabTick.tried = cid;
+    log('本节默认停在非视频标签，自动切到「视频」标签');
+    clickEl(target);
+  }
+
+  /** 返回 {empty, hasVideo, hasQuiz, isExamPage, why} */
   function emptyChapterProbe() {
     const hasVideo = anyVisibleVideo();
     const hasQuiz = anyVisibleQuiz();
@@ -1224,11 +1274,21 @@
     const framePlaying = !!(fv && !fv.paused && !fv.ended && lastFrameState.at && Date.now() - lastFrameState.at < 12000);
     // 空提示可能在顶层，也可能在内容 iframe 里（学习通的章节内容基本都在 iframe 中）
     const emptyText = hasEmptyHint() || !!lastFrameState.emptyHint;
+    // 章节测验页：有"题量/满分"这类字样，绝不能当没内容跳过去
+    let pageText = '';
+    try {
+      pageText = cleanText((document.body && document.body.innerText) || '').slice(0, 3000);
+    } catch (_) {}
+    const isExamPage = /题量\s*[:：]|满分\s*[:：]|\d+\s*题\s*\/|单选题|多选题|判断题/.test(pageText);
     const empty = IS_TOP && !hasVideo && !hasQuiz && !framePlaying && emptyText;
     return {
       empty,
+      hasVideo,
+      hasQuiz,
+      isExamPage,
       why: '视频' + (hasVideo ? '有' : '无') + '/题目' + (hasQuiz ? '有' : '无') +
-        '/框架在播' + (framePlaying ? '是' : '否') + '/空提示' + (emptyText ? '有' : '无'),
+        '/框架在播' + (framePlaying ? '是' : '否') + '/空提示' + (emptyText ? '有' : '无') +
+        '/测验页' + (isExamPage ? '是' : '否'),
     };
   }
 
@@ -1237,7 +1297,11 @@
     if (emptyTick.id !== cid) emptyTick = { id: cid, n: 0, done: '', told: '' };
     if (emptyTick.done === cid) return;
     const probe = emptyChapterProbe();
-    if (!probe.empty) {
+    // 没有「暂无内容」提示、但确实既无视频又无题目、也不是章节测验页 —— 多半是
+    // "学习目标"这类纯文字页；给它更长的观察时间（4 次 ≈24s），确认没视频再跳。
+    const soft = !probe.empty && IS_TOP && !probe.hasVideo && !probe.hasQuiz && !probe.isExamPage && !pageHasVideo();
+    const need = probe.empty ? 2 : 4;
+    if (!probe.empty && !soft) {
       emptyTick.n = 0;
       // 每个章节只解释一次，便于远程定位"为什么没跳过"
       if (emptyTick.told !== cid) {
@@ -1247,8 +1311,11 @@
       return;
     }
     emptyTick.n += 1;
-    // 连续两次（≈12s）都是空的才算数，避免网络慢时把"正在加载"当成没内容
-    if (emptyTick.n < 2) return;
+    if (emptyTick.told !== cid) {
+      emptyTick.told = cid;
+      log('本章内容检测：' + probe.why + (soft ? '（无空提示，按纯文字页处理）' : ''));
+    }
+    if (emptyTick.n < need) return;
     emptyTick.done = cid;
     log('本章没有视频也没有题目，自动跳过（' + probe.why + '）');
     goNext(false);
@@ -1335,6 +1402,11 @@
       if (n % 3 === 0) {
         try {
           tryAutostart();
+        } catch (_) {}
+      }
+      if (n % 2 === 0 && cfg.enabled && cfg.autoNext) {
+        try {
+          ensureVideoTab();
         } catch (_) {}
       }
       if (n % 5 === 0 && cfg.enabled && cfg.autoNext) {
