@@ -4,7 +4,7 @@ const DEFAULTS = {
   keepPlaying: true,
   blockVisibility: true,
   autoQuiz: true,
-  autoChapterQuiz: false,
+  autoChapterQuiz: true,
   autoNext: true,
   mute: false,
   rate: 0,
@@ -160,6 +160,14 @@ function renderStatus(st) {
       .join('');
     body.scrollTop = body.scrollHeight;
   }
+  if (diagText) {
+    // 结构诊断（点「识别当前题目」后抓的 DOM 快照）固定贴在日志后面
+    body.innerHTML +=
+      '<div class="log-line"><span class="log-time">结构</span><pre style="white-space:pre-wrap;margin:0;font:inherit">' +
+      escapeHtml(diagText) +
+      '</pre></div>';
+    body.scrollTop = body.scrollHeight;
+  }
 }
 
 function escapeHtml(s) {
@@ -172,6 +180,73 @@ function escapeHtml(s) {
 async function refresh() {
   const st = await sendToTab({ type: 'getStatus' });
   renderStatus(st);
+}
+
+/* ---------------- 结构诊断：抓所有框架里"像题目"的 DOM 摘要 ---------------- */
+let diagText = '';
+
+function dumpExamDom() {
+  // 注意：这个函数会被注入到页面里执行，不能引用外部的任何变量
+  const vis = (el) => {
+    try {
+      const r = el.getBoundingClientRect();
+      const st = getComputedStyle(el);
+      return r.width > 4 && r.height > 4 && st.visibility !== 'hidden' && st.display !== 'none' && +st.opacity > 0.05;
+    } catch (_) {
+      return false;
+    }
+  };
+  const cls = (el) => {
+    let c = '';
+    try {
+      const cn = el.className;
+      c = typeof cn === 'string' ? cn.trim().split(/\s+/).slice(0, 3).join('.') : '';
+    } catch (_) {}
+    return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (c ? '.' + c : '');
+  };
+  const out = [];
+  const radios = document.querySelectorAll('input[type="radio"]');
+  const boxes = document.querySelectorAll('input[type="checkbox"]');
+  out.push('inputs: radio=' + radios.length + ' checkbox=' + boxes.length + ' allInputs=' + document.querySelectorAll('input').length);
+
+  let cands = [];
+  const all = Array.from(document.querySelectorAll('div, li, ul, dl, section'));
+  for (const el of all) {
+    if (!vis(el)) continue;
+    const t = (el.innerText || '').trim();
+    if (t.length < 20 || t.length > 1500) continue;
+    if (!/多选题|单选题|判断题|填空题|【.*题】/.test(t)) continue;
+    if (el.querySelectorAll('div, li, ul, dl').length > 60) continue;
+    cands.push(el);
+  }
+  cands = cands.filter((el) => !cands.some((o) => o !== el && el.contains(o))).slice(0, 2);
+  out.push('题目候选块=' + cands.length);
+  for (const c of cands) {
+    out.push('Q ' + cls(c));
+    const kids = Array.from(c.querySelectorAll('*')).slice(0, 26).map(cls);
+    out.push('  kids: ' + kids.join(' | '));
+    out.push('  text: ' + (c.innerText || '').replace(/\s+/g, ' ').slice(0, 200));
+  }
+  return out.join('\n');
+}
+
+async function runDiag() {
+  if (tabId == null) return;
+  diagText = '';
+  try {
+    const res = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: dumpExamDom,
+    });
+    const parts = [];
+    for (const r of res || []) {
+      if (r && r.result) parts.push('[frame ' + (r.frameId || 0) + ']\n' + r.result);
+    }
+    diagText = parts.join('\n---\n').slice(0, 3000) || '（所有框架都没抓到题目结构）';
+  } catch (e) {
+    diagText = '抓取失败：' + ((e && e.message) || e);
+  }
+  refresh();
 }
 
 /* ---------------- 按钮 ---------------- */
@@ -187,6 +262,7 @@ $('btnScan').addEventListener('click', async () => {
   const r = await sendToTab({ type: 'cmd', cmd: 'scanQuiz' });
   if (!r || r.__err) $('pageHint').textContent = '无法执行：请确认在课程学习页';
   else $('pageHint').textContent = '已扫描当前页面，详情看日志或页面控制台。';
+  runDiag();
   setTimeout(refresh, 1500);
 });
 

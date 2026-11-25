@@ -29,7 +29,7 @@
     keepPlaying: true,
     blockVisibility: true,
     autoQuiz: true,
-    autoChapterQuiz: false,
+    autoChapterQuiz: true,
     autoNext: true,
     mute: false,
     rate: 0,
@@ -306,6 +306,8 @@
    * 自动下一节
    * ================================================================== */
   let nextScheduled = false;
+  // 本章的章节测验已经是批阅状态（我的答案/本次成绩）时记下来，避免反复切过去
+  let examGradedChapter = '';
 
   function scheduleNext() {
     if (nextScheduled) return;
@@ -619,13 +621,69 @@
     return ok ? { ok: true, how: '目录「' + target.name + '」' } : { ok: false, reason: '点了目录没反应（' + target.name + '）' };
   }
 
+  const examNavTick = { chapter: '', opened: false };
+
+  /** 本章还有没做的章节测验吗（同一章只主动切一次，避免来回切） */
+  function examTabPending() {
+    const ch = currentChapterId() || location.href;
+    if (examGradedChapter === ch) return null;
+    if (examNavTick.chapter === ch && examNavTick.opened) return null;
+    let t = '';
+    try {
+      t = cleanText((document.body && document.body.innerText) || '');
+    } catch (_) {}
+    if (/我的答案\s*[:：]|本次成绩/.test(t)) return null;
+    for (const el of tabItems()) {
+      const s2 = cleanText(el.textContent || '');
+      if (!/章节测验|章节测试/.test(s2)) continue;
+      if (!visible(el)) continue;
+      return el;
+    }
+    return null;
+  }
+
   async function goNext(manual) {
     if (!manual) {
       if (!cfg.enabled) return { ok: false, reason: '插件已关闭' };
       if (!cfg.autoNext) return { ok: false, reason: '自动下一节开关是关的' };
     }
 
-    // 1) 目录优先：点完能验证到底跳没跳，比乱猜按钮可靠
+    // 0) 本节视频看完了，但本章还有没做的章节测验 → 先去做题，别急着跳下一节
+    if (!manual && cfg.autoChapterQuiz) {
+      const tab = examTabPending();
+      if (tab) {
+        examNavTick.chapter = currentChapterId() || location.href;
+        examNavTick.opened = true;
+        clickHard(tab);
+        log('本节看完了，先切到「章节测验」把题做掉');
+        setTimeout(() => {
+          let t = '';
+          try {
+            t = cleanText((document.body && document.body.innerText) || '');
+          } catch (_) {}
+          if (/我的答案|本次成绩|已完成/.test(t)) {
+            log('章节测验已经是做完的状态，继续下一节');
+            scheduleNext();
+          }
+        }, 9000);
+        return { ok: true, how: '先做章节测验' };
+      }
+    }
+
+    // 1) 页面上的「下一节」按钮优先（和学习通自己的交互一致，点了也能验证）
+    const direct = pickFirst(NEXT_BUTTONS, true) || findNextByText();
+    if (direct) {
+      const label0 = cleanText(direct.textContent || direct.title || '').slice(0, 12);
+      const before0 = currentKey();
+      clickEl(direct);
+      log('点击下一节按钮', label0 || '(无文字)');
+      if (await waitNavigated(before0, 6000)) {
+        return { ok: true, how: '下一节按钮' + (label0 ? '「' + label0 + '」' : '') };
+      }
+      log('下一节按钮点了没动，改走目录');
+    }
+
+    // 2) 目录兜底：点完能验证到底跳没跳
     const cat = await catalogNext();
     if (cat.ok) return cat;
 
@@ -922,19 +980,10 @@
     }
   }
 
-  async function solveAndAnswer(quiz, force) {
-    const sig = hashStr(quiz.question + '||' + quiz.options.map((o) => o.text).join('|'));
-    const seen = handled.get(sig);
-    if (!force && seen && Date.now() - seen < 10 * 60 * 1000) return { skipped: true };
-    handled.set(sig, Date.now());
-
-    lastQuizSig = sig;
-    log('识别到弹题（' + (quiz.multi ? '多选' : '单选') + '）：' + quiz.question.slice(0, 80));
-    quiz.options.forEach((o, i) => log('  选项' + i + '：' + o.text.slice(0, 60)));
-
-    let res = null;
+  /** 只问"这道题选什么"，不动页面。弹题与章节测验共用。 */
+  async function askBrain(quiz) {
     try {
-      res = await new Promise((resolve) => {
+      return await new Promise((resolve) => {
         const timer = setTimeout(() => resolve({ ok: false, reason: '答题服务超时' }), 45000);
         try {
           chrome.runtime.sendMessage(
@@ -958,8 +1007,21 @@
         }
       });
     } catch (e) {
-      res = { ok: false, reason: String((e && e.message) || e) };
+      return { ok: false, reason: String((e && e.message) || e) };
     }
+  }
+
+  async function solveAndAnswer(quiz, force) {
+    const sig = hashStr(quiz.question + '||' + quiz.options.map((o) => o.text).join('|'));
+    const seen = handled.get(sig);
+    if (!force && seen && Date.now() - seen < 10 * 60 * 1000) return { skipped: true };
+    handled.set(sig, Date.now());
+
+    lastQuizSig = sig;
+    log('识别到弹题（' + (quiz.multi ? '多选' : '单选') + '）：' + quiz.question.slice(0, 80));
+    quiz.options.forEach((o, i) => log('  选项' + i + '：' + o.text.slice(0, 60)));
+
+    const res = await askBrain(quiz);
 
     if (!res || !res.ok || !Array.isArray(res.answers) || !res.answers.length) {
       const why = (res && res.reason) || '没拿到答案';
@@ -1099,38 +1161,633 @@
   }
 
   /* ================================================================== *
-   * 章节测验（可选，默认关闭）
+   * 章节测验（整卷）：逐题问大模型 → 全部填好 → 点提交
+   * 默认关闭；只有面板里打开「章节测验自动作答」才会动，而且填不全不提交。
    * ================================================================== */
-  async function scanChapterQuiz() {
-    if (!cfg.enabled || !cfg.autoChapterQuiz) return;
-    let blocks = [];
+  const EXAM_BLOCK_SEL = ['.TiMu', '.questionLi', '.question-item', '.mark_item', '.exam-question'];
+  const EXAM_SUBMIT_TEXT = ['提交', '提交答案', '交卷', '提交试卷', '保存并提交'];
+  let examTick = { lastTry: 0, filling: false, submitted: '' };
+
+  /** 这一页像不像章节测验（有题量/满分/题型字样，或当前选中的标签是"章节测验"） */
+  function looksLikeExamPage() {
+    let t = '';
     try {
-      blocks = Array.from(document.querySelectorAll('.TiMu, .questionLi, .question-item'));
+      t = cleanText((document.body && document.body.innerText) || '').slice(0, 3000);
     } catch (_) {}
-    if (!blocks.length) return;
-    for (const b of blocks) {
-      const quiz = extractQuiz(b);
-      if (!quiz) continue;
-      const t = cleanText(b.textContent || '');
-      if (/正确答案|已批阅|正确/.test(t)) continue;
-      await solveAndAnswer(quiz, false);
-      await sleep(900);
-    }
-    // 整页共用一个提交按钮
+    if (/题量\s*[:：]|满分\s*[:：]|\d+\s*题\s*\/|单选题|多选题|判断题/.test(t)) return true;
+    return /测验|考试|作业/.test(activeTabText());
+  }
+
+  /* ---- 顶部那排标签（1 学习目标 / 2 视频 / 2 章节测验）---- */
+  const TAB_TEXT_RE = /^(?:\d+\s*)?(视频|章节测验|章节测试|学习目标|作业|考试|讨论|资料|拓展|测验)$/;
+
+  function tabItems() {
+    const out = [];
+    let list = [];
     try {
-      const all = Array.from(document.querySelectorAll('button, a, div, span'));
-      for (const el of all) {
-        const t = cleanText(el.textContent || '');
-        if (t === '提交' || t === '提交答案') {
-          if (visible(el) && el.getClientRects().length) {
-            await sleep(600);
-            clickEl(el);
-            log('已提交章节测验');
-            break;
-          }
+      list = Array.from(document.querySelectorAll('a, li, div, span'));
+    } catch (_) {}
+    for (const el of list) {
+      const t = cleanText(el.textContent || '');
+      if (!t || !TAB_TEXT_RE.test(t)) continue;
+      if (!visible(el)) continue;
+      if (el.querySelectorAll('*').length > 3) continue; // 只要标签本身
+      out.push(el);
+    }
+    return out;
+  }
+
+  /** 选中态：class 里有 active/cur/selected，或底色是明显的蓝 */
+  function isActiveish(el) {
+    let p = el;
+    for (let i = 0; i < 3 && p; i++, p = p.parentElement) {
+      let cls = '';
+      try {
+        cls = String(p.className || '') + ' ' + String((p.getAttribute && p.getAttribute('class')) || '');
+      } catch (_) {}
+      if (/\b(active|cur|current|selected|on|checked)\b/i.test(cls) || /(active|cur$|current|selected|checked|itemOn|on$)/i.test(cls)) return true;
+      try {
+        const bg = getComputedStyle(p).backgroundColor || '';
+        const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        if (m) {
+          const r = +m[1];
+          const g = +m[2];
+          const b = +m[3];
+          if (b > 150 && b - r > 40 && b - g > 20) return true; // 蓝底白字那种选中态
+        }
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  function activeTabText() {
+    const items = tabItems();
+    for (const el of items) if (isActiveish(el)) return cleanText(el.textContent || '');
+    return '';
+  }
+
+  function examBlocks() {
+    let best = [];
+    for (const sel of EXAM_BLOCK_SEL) {
+      let found = [];
+      try {
+        found = Array.from(document.querySelectorAll(sel));
+      } catch (_) {}
+      found = found.filter((el) => visible(el) && choiceInputs(el).length >= 2);
+      if (found.length > best.length) best = found;
+    }
+    if (!best.length) best = examBlocksByInputs();
+    // 去掉嵌套：只留最外层，避免同一道题被算两遍
+    return best.filter((el) => !best.some((o) => o !== el && el.contains(o)));
+  }
+
+  /** 兜底：不认容器 class 时，从"第一个包含 ≥2 个选项的父节点"反推题块 */
+  function examBlocksByInputs() {
+    const out = [];
+    let inputs = [];
+    try {
+      inputs = Array.from(document.querySelectorAll('input[type="radio"], input[type="checkbox"]')).filter(inputVisible);
+    } catch (_) {}
+    for (const inp of inputs) {
+      let p = inp.parentElement;
+      let best = null;
+      for (let d = 0; p && d < 8; d++, p = p.parentElement) {
+        let n = 0;
+        try {
+          n = p.querySelectorAll('input[type="radio"], input[type="checkbox"]').length;
+        } catch (_) {}
+        if (n >= 2) {
+          best = p;
+          break;
         }
       }
+      if (!best) continue;
+      if (out.some((o) => o === best || o.contains(best))) continue;
+      out.push(best);
+    }
+    return out;
+  }
+
+  function examBlockFilled(block) {
+    try {
+      return choiceInputs(block).some((i) => i.checked);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function examDone(block) {
+    return /正确答案\s*[:：]|已批阅|本题得分/.test(cleanText(block.textContent || ''));
+  }
+
+  function examSubmitBtn() {
+    let cands = [];
+    try {
+      cands = Array.from(document.querySelectorAll('a, button, div, span, input[type="button"], input[type="submit"]'));
     } catch (_) {}
+    for (const el of cands) {
+      if (!visible(el)) continue;
+      const t = cleanText(el.textContent || el.value || '');
+      if (!t || t.length > 10) continue;
+      if (!EXAM_SUBMIT_TEXT.includes(t)) continue;
+      if (el.querySelector('a, button, div, span')) continue; // 只要叶子
+      if (el.closest('.TiMu, .questionLi, .question-item')) continue; // 题内的小按钮不算
+      return el;
+    }
+    return null;
+  }
+
+  /** 只勾选项，不点提交（整卷一起提交） */
+  async function applyChoiceOnly(quiz, answers) {
+    for (const idx of answers) {
+      const opt = quiz.options[idx];
+      if (!opt || !opt.input) continue;
+      if (opt.input.checked) continue;
+      clickEl(opt.input);
+      await sleep(120 + Math.random() * 160);
+      if (!opt.input.checked) {
+        const label = opt.input.closest('label');
+        if (label) clickEl(label);
+        else if (opt.input.parentElement) clickEl(opt.input.parentElement);
+        await sleep(150);
+      }
+    }
+  }
+
+  /** 交卷弹窗：先看它是不是在警告"还有没做完的"，是就取消，绝不硬交 */
+  /** 能搜到的所有文档：自己 + 各级父框架 + 子框架（弹窗可能不在发起点击的那个框架里） */
+  function dialogDocs() {
+    const docs = [document];
+    let w = window;
+    for (let i = 0; i < 6; i++) {
+      try {
+        if (!w.parent || w.parent === w) break;
+        w = w.parent;
+        if (w.document && docs.indexOf(w.document) < 0) docs.push(w.document);
+      } catch (_) {
+        break;
+      }
+    }
+    const addKids = (doc) => {
+      try {
+        for (const f of doc.querySelectorAll('iframe')) {
+          let d = null;
+          try {
+            d = f.contentDocument;
+          } catch (_) {}
+          if (d && docs.indexOf(d) < 0) {
+            docs.push(d);
+            addKids(d);
+          }
+        }
+      } catch (_) {}
+    };
+    for (const d of docs.slice()) addKids(d);
+    return docs;
+  }
+
+  function examDialogRoot() {
+    const RE = /未做完|还有.{0,8}未|确认提交|确定要?提交|确认要?提交|提交试卷吗|提交吗|确认交卷/;
+    let best = null;
+    for (const doc of dialogDocs()) {
+      let list = [];
+      try {
+        list = Array.from(doc.querySelectorAll('div, section, article, form'));
+      } catch (_) {
+        continue;
+      }
+      for (const el of list) {
+        if (!visible(el)) continue;
+        const t = cleanText(el.textContent || '');
+        if (!t || t.length > 300) continue;
+        if (!RE.test(t)) continue;
+        if (!/取消/.test(t) || !/提交/.test(t)) continue;
+        if (best && best.contains(el)) continue;
+        best = el;
+        if (best && best.parentElement && best.parentElement.textContent.length < 320) {
+          // 继续往上找更完整的弹窗，但别超过一层
+        }
+      }
+      if (best) return { root: best, text: cleanText(best.textContent || '') };
+    }
+    return null;
+  }
+
+  async function confirmExamSubmit() {
+    // 弹窗可能是动画进来的，多等几轮
+    let dlg = null;
+    for (let i = 0; i < 4; i++) {
+      await sleep(i === 0 ? 700 : 700);
+      dlg = examDialogRoot();
+      if (dlg) break;
+    }
+    if (!dlg) {
+      log('没看到确认弹窗（可能已经交了）');
+      return 'none';
+    }
+    const scope = dlg.root;
+    // 页面自己说"还有未做完的题"→ 取消，绝不硬交
+    if (/未做完|还有.*未|请完成|不能提交/.test(dlg.text)) {
+      for (const el of Array.from(scope.querySelectorAll('a, button, div, span'))) {
+        if (!visible(el)) continue;
+        const t = cleanText(el.textContent || '');
+        if (!/^(取消|关闭|再想想)$/.test(t)) continue;
+        if (el.querySelector('a, button, div, span')) continue;
+        clickHard(el);
+        log('弹窗说还有没做完的题，已点「' + t + '」取消提交');
+        return 'cancel';
+      }
+      log('弹窗说还有没做完的题，但没找到「取消」，请你手动点取消');
+      return 'cancel';
+    }
+    for (const el of Array.from(scope.querySelectorAll('a, button, div, span'))) {
+      if (!visible(el)) continue;
+      const t = cleanText(el.textContent || '');
+      if (!/^(提交|确定|确认|确定提交|确认提交|是的|是)$/.test(t)) continue;
+      if (el.querySelector('a, button, div, span')) continue;
+      if (el.closest('.TiMu, .questionLi, .question-item')) continue;
+      clickHard(el);
+      log('已确认提交弹窗「' + t + '」');
+      return 'ok';
+    }
+    return 'none';
+  }
+
+  async function solveChapterQuiz() {
+    if (!cfg.enabled || !cfg.autoChapterQuiz) return; // 题目可能整块在 iframe 里，所以不限定顶层
+    if (examTick.filling) return;
+    const blocks = examBlocks();
+    if (!blocks.length) return;
+    const key = location.href + '#' + blocks.length;
+    if (examTick.submitted === key) return;
+    if (Date.now() - examTick.lastTry < 15000) return; // 失败的题别每轮都问一遍
+
+    examTick.lastTry = Date.now();
+    examTick.filling = true;
+    try {
+      const todo = blocks.filter((b) => !examBlockFilled(b) && !examDone(b));
+      if (todo.length) {
+        log('章节测验：共 ' + blocks.length + ' 道题，' + todo.length + ' 道待填，开始作答');
+        let ok = 0;
+        for (const b of todo) {
+          const quiz = extractQuiz(b);
+          if (!quiz) {
+            log('测验：这一块认不出选项，先跳过');
+            continue;
+          }
+          log('测验作答（' + (quiz.multi ? '多选' : '单选') + '）：' + quiz.question.slice(0, 60));
+          const res = await askBrain(quiz);
+          if (!res || !res.ok || !Array.isArray(res.answers) || !res.answers.length) {
+            log('测验答题失败：' + ((res && res.reason) || '没拿到答案'));
+            continue;
+          }
+          let answers = res.answers
+            .map((n) => Number(n))
+            .filter((n) => Number.isInteger(n) && n >= 0 && n < quiz.options.length);
+          if (!quiz.multi && answers.length > 1) answers = answers.slice(0, 1);
+          if (!answers.length) continue;
+          await applyChoiceOnly(quiz, answers);
+          ok += 1;
+          log(
+            '已填第 ' + ok + ' 题（' + (res.source || '?') + '）：' +
+              answers.map((i) => quiz.options[i].text.slice(0, 16)).join(' / ')
+          );
+          await sleep(400);
+        }
+      }
+
+      const left = examBlocks().filter((b) => !examBlockFilled(b) && !examDone(b));
+      if (left.length) {
+        log('还有 ' + left.length + ' 道题没填上，先不提交（填齐了会自动提交）');
+        return;
+      }
+      const btn = examSubmitBtn();
+      if (!btn) {
+        log('题目都填好了，但没找到「提交」按钮，请手动提交');
+        return;
+      }
+      const label = cleanText(btn.textContent || '') || '提交';
+      clickEl(btn);
+      log('已点击「' + label + '」');
+      await confirmExamSubmit();
+      examTick.submitted = key;
+      toast('章节测验已作答并提交', 'ok');
+    } catch (e) {
+      log('章节测验出错：' + ((e && e.message) || e));
+    } finally {
+      examTick.filling = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * 文字版章节测验（2025 新版）
+   * 新版把整份卷子塞在 mooc-ans/work/selectWorkQuestion 这个框架里，
+   * 页面里一个 input 都没有，选项是 div/span 画的。
+   * 所以：按文字解析题目 -> 按文字找到选项节点 -> 点掉 -> 靠样式变化确认。
+   * ---------------------------------------------------------------- */
+  const EXAM_TAG_RE = /【\s*(多选题|单选题|判断题|填空题|简答题|论述题|名词解释)\s*】/;
+  let textExamTick = { last: 0, busy: false, done: '' };
+
+  function examPlainText() {
+    try {
+      return String((document.body && document.body.innerText) || '');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function looksLikeTextExam() {
+    const t = examPlainText();
+    if (!t) return false;
+    if (!/题量\s*[:：]|满分\s*[:：]/.test(t.slice(0, 1500))) return false;
+    return EXAM_TAG_RE.test(t);
+  }
+
+  function typeOfTag(tag) {
+    if (/多选/.test(tag)) return 'multi';
+    if (/判断/.test(tag)) return 'judge';
+    if (/单选/.test(tag)) return 'single';
+    return 'text'; // 填空/简答/论述：不处理
+  }
+
+  /** 把整页文字解析成 [{type, stem, options:[{letter,text}]}] */
+  function parseTextExam() {
+    const lines = examPlainText()
+      .split(/\r?\n/)
+      .map((s) => cleanText(s))
+      .filter((s) => s !== '');
+    const out = [];
+    let cur = null;
+    for (let i = 0; i < lines.length; i++) {
+      const ln = lines[i];
+      const tag = ln.match(EXAM_TAG_RE);
+      if (tag) {
+        cur = { type: typeOfTag(tag[1]), stem: [], options: [] };
+        const rest = cleanText(ln.slice(ln.indexOf(tag[0]) + tag[0].length));
+        if (rest) cur.stem.push(rest);
+        out.push(cur);
+        continue;
+      }
+      if (!cur) continue;
+      const mo = ln.match(/^([A-H])(?:\s*[、.．:：)）]\s*|\s+)(.*)$/) || ln.match(/^([A-H])$/);
+      if (mo) {
+        let text = cleanText(mo[2]);
+        if (!text) {
+          const nx = lines[i + 1];
+          if (nx && !/^[A-H]\s*[、.．:：)）]/.test(nx) && !EXAM_TAG_RE.test(nx)) {
+            text = cleanText(nx);
+            i += 1;
+          }
+        }
+        cur.options.push({ letter: mo[1], text: text || '选项 ' + mo[1] });
+        continue;
+      }
+      if (!cur.options.length) cur.stem.push(ln);
+    }
+    for (const q of out) {
+      // 判断题有时只写"对 / 错"，没有 A/B
+      if (q.type === 'judge' && q.options.length < 2) {
+        q.options = [
+          { letter: 'A', text: '对' },
+          { letter: 'B', text: '错' },
+        ];
+      }
+    }
+    return out.filter((q) => q.options.length >= 2 && q.type !== 'text');
+  }
+
+  /** 按"字母 + 选项文字"找出最内层的可点节点 */
+  function findOptionNode(opt) {
+    let list = [];
+    try {
+      list = Array.from(document.querySelectorAll('div, li, span, a, p, label, td'));
+    } catch (_) {}
+    const hits = [];
+    const letterRe = new RegExp('^' + opt.letter + '\\s*[、.．:：)）]?');
+    for (const el of list) {
+      if (!visible(el)) continue;
+      const t = cleanText(el.textContent || '');
+      if (!t || t.length > 300) continue;
+      const body = cleanText(t.replace(letterRe, ''));
+      const okBody = body === opt.text || t === opt.text || t.indexOf(opt.text) >= 0;
+      const okJudge = (opt.text === '对' || opt.text === '错') && t === opt.text;
+      if (!okBody && !okJudge) continue;
+      hits.push(el);
+    }
+    if (!hits.length) return null;
+    const inner = hits.filter((el) => !hits.some((o) => o !== el && el.contains(o)));
+    return inner[inner.length - 1] || hits[hits.length - 1];
+  }
+
+  /** 整块 HTML 的指纹：任何 class / 样式 / 子元素变化都会变 */
+  function htmlSig(el) {
+    let s = '';
+    try {
+      s = String((el && el.innerHTML) || '');
+    } catch (_) {}
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = (h * 16777619) >>> 0;
+    }
+    return s.length + ':' + h;
+  }
+
+  /** 往上找到"含至少两个字母选项"的那一块，作为比对范围 */
+  function optionRowScope(node) {
+    const letterCount = (p) => {
+      let n = 0;
+      try {
+        for (const x of p.querySelectorAll('*')) {
+          if (x.children.length) continue;
+          const t = cleanText(x.textContent || '');
+          if (/^[A-H]$/.test(t)) n += 1;
+          if (n >= 2) break;
+        }
+      } catch (_) {}
+      return n;
+    };
+    let p = node;
+    for (let i = 0; i < 6 && p && p.parentElement; i++) {
+      p = p.parentElement;
+      if (p === document.body || p === document.documentElement) break;
+      if (letterCount(p) >= 2) return p;
+    }
+    return node.parentElement || node;
+  }
+
+  /** 点一个选项，返回"这一块 HTML 有没有变化"（变了基本就是选上了） */
+  async function clickOptionNode(node) {
+    const scope = optionRowScope(node);
+    const before = htmlSig(scope);
+    const targets = [node];
+    let up = node;
+    for (let i = 0; i < 3 && up && up.parentElement; i++) {
+      up = up.parentElement;
+      if (up === document.body) break;
+      targets.push(up);
+    }
+    for (const t of targets) {
+      try {
+        clickHard(t);
+      } catch (_) {}
+      await sleep(170 + Math.random() * 110);
+      if (htmlSig(scope) !== before) return true;
+    }
+    return false;
+  }
+
+  /** 只负责点「提交」，确认弹窗交给调用方处理 */
+  async function submitTextExam() {
+    let cands = [];
+    try {
+      cands = Array.from(document.querySelectorAll('a, button, div, span, input[type="button"], input[type="submit"]'));
+    } catch (_) {}
+    for (const el of cands) {
+      if (!visible(el)) continue;
+      const t = cleanText(el.textContent || el.value || '');
+      if (!/^(提交|提交答案|交卷|提交试卷|保存并提交|提交作业)$/.test(t)) continue;
+      if (el.querySelector('a, button, div, span')) continue;
+      clickHard(el);
+      log('已点提交「' + t + '」');
+      await sleep(700);
+      return true;
+    }
+    return false;
+  }
+
+  function examDeclaredCount() {
+    const m = examPlainText().match(/题量\s*[:：]\s*(\d+)/);
+    return m ? Number(m[1]) : 0;
+  }
+
+  /** 新版卷子懒加载：不滚到底，innerText 里只有已经渲染出来的题 */
+  async function scrollLoadAll() {
+    const el = document.scrollingElement || document.documentElement;
+    try {
+      const step = Math.max(300, Math.floor(window.innerHeight * 0.8));
+      for (let y = 0; y < el.scrollHeight; y += step) {
+        window.scrollTo(0, y);
+        await sleep(220);
+      }
+      window.scrollTo(0, el.scrollHeight);
+      await sleep(600);
+      window.scrollTo(0, 0);
+      await sleep(300);
+    } catch (_) {}
+  }
+
+  async function solveTextExam() {
+    if (!cfg.enabled || !cfg.autoChapterQuiz) return;
+    if (textExamTick.busy) return;
+    const t = examPlainText();
+    // 已经答过 / 已批阅的卷子，绝不要再动；但要把"这章测验做完了"告诉顶层，好切回视频
+    if (/我的答案\s*[:：]|本次成绩|已批阅|AI讲解/.test(t)) {
+      if (!textExamTick.gradedAt) {
+        textExamTick.gradedAt = Date.now();
+        log('本章测验已是批阅状态，切回视频别在这儿停着');
+        try { window.top.postMessage({ __cx: 'examGraded' }, '*'); } catch (_) {}
+      }
+      return;
+    }
+    if (!looksLikeTextExam()) return;
+    let qs = parseTextExam();
+    const declared = examDeclaredCount();
+    if (declared && qs.length < declared) {
+      log('页面写了 ' + declared + ' 题，只解析到 ' + qs.length + ' 题，先把整卷滚一遍再解析');
+      await scrollLoadAll();
+      qs = parseTextExam();
+    }
+    if (!qs.length) return;
+    const key = location.href + '#' + qs.length;
+    if (textExamTick.done === key) return;
+    if (Date.now() - textExamTick.last < 15000) return;
+
+    textExamTick.last = Date.now();
+    textExamTick.busy = true;
+    try {
+      log('章节测验（文字版）：共 ' + qs.length + ' 题，开始作答');
+      let filled = 0;
+      const unverified = [];
+      for (let qi = 0; qi < qs.length; qi++) {
+        const q = qs[qi];
+        const quiz = {
+          question: cleanText(q.stem.join(' ')).slice(0, 600),
+          options: q.options.map((o, i) => ({ index: i, input: null, text: o.letter + '、' + o.text })),
+          multi: q.type === 'multi',
+        };
+        if (!quiz.question) continue;
+        log(
+          '测验第 ' + (qi + 1) + ' 题（' +
+            (q.type === 'multi' ? '多选' : q.type === 'judge' ? '判断' : '单选') +
+            '）：' + quiz.question.slice(0, 50)
+        );
+        const res = await askBrain(quiz);
+        if (!res || !res.ok || !Array.isArray(res.answers) || !res.answers.length) {
+          log('第 ' + (qi + 1) + ' 题没拿到答案：' + ((res && res.reason) || '未知'));
+          continue;
+        }
+        let idxs = res.answers
+          .map((n) => Number(n))
+          .filter((n) => Number.isInteger(n) && n >= 0 && n < q.options.length);
+        if (q.type !== 'multi' && idxs.length > 1) idxs = idxs.slice(0, 1);
+        let hit = 0;
+        let changedAny = false;
+        for (const idx of idxs) {
+          const opt = q.options[idx];
+          const node = findOptionNode(opt);
+          if (!node) {
+            log('找不到选项 ' + opt.letter + ' 的可点击位置');
+            continue;
+          }
+          const changed = await clickOptionNode(node);
+          log('点选 ' + opt.letter + (changed ? '（样式已变化）' : '（样式没变，需要盯一眼）'));
+          hit += 1;
+          if (changed) changedAny = true;
+        }
+        if (hit) filled += 1;
+        if (hit && !changedAny) unverified.push(qi + 1);
+        await sleep(300);
+      }
+      if (unverified.length) log('这几题点了但看不出选中效果：第 ' + unverified.join('、') + ' 题（提交后会以页面的提示为准）');
+      if (filled < qs.length) {
+        log('只填了 ' + filled + '/' + qs.length + ' 题，先不提交');
+        return;
+      }
+      const ok = await submitTextExam();
+      if (!ok) {
+        log('都填好了，但没找到「提交」按钮，请手动交');
+        return;
+      }
+      const verdict = await confirmExamSubmit();
+      if (verdict === 'cancel') {
+        // 页面自己说还有没做完的题：取消掉，等一会儿再试，别硬交
+        textExamTick.last = Date.now() + 45000;
+        log('已取消提交（页面说还有没做完的题），稍后重试');
+        return;
+      }
+      if (verdict === 'ok') {
+        textExamTick.done = key;
+        toast('章节测验已作答并提交', 'ok');
+        log('本章测验做完了，稍后自动进入下一节');
+        setTimeout(() => {
+          if (IS_TOP) scheduleNext();
+          else {
+            try {
+              window.top.postMessage({ __cx: 'videoEnded' }, '*');
+              log('已通知顶层去点「下一节」');
+            } catch (_) {}
+          }
+        }, 4000);
+      } else {
+        textExamTick.done = key;
+        log('提交后没看到确认弹窗，可能已经交了（请看一眼页面）');
+      }
+    } catch (e) {
+      log('文字版章节测验出错：' + ((e && e.message) || e));
+    } finally {
+      textExamTick.busy = false;
+    }
   }
 
   /* ================================================================== *
@@ -1254,6 +1911,10 @@
     if (!IS_TOP) return;
     if (!cfg.enabled || !cfg.autoNext) return;
     if (pageHasVideo()) return;
+    // 章节测验页不要去"切视频标签"——那会把用户正在做的卷子切走
+    if (looksLikeExamPage() && examGradedChapter !== (currentChapterId() || location.href)) return;
+    // 用户刚自己点过页面（比如手动切了标签），60 秒内不抢
+    if (Date.now() - lastTrustedPointer < 60000) return;
     const cid = currentChapterId() || location.href;
     if (videoTabTick.id !== cid) videoTabTick = { id: cid, tried: '' };
     if (videoTabTick.tried === cid) return;
@@ -1275,11 +1936,7 @@
     // 空提示可能在顶层，也可能在内容 iframe 里（学习通的章节内容基本都在 iframe 中）
     const emptyText = hasEmptyHint() || !!lastFrameState.emptyHint;
     // 章节测验页：有"题量/满分"这类字样，绝不能当没内容跳过去
-    let pageText = '';
-    try {
-      pageText = cleanText((document.body && document.body.innerText) || '').slice(0, 3000);
-    } catch (_) {}
-    const isExamPage = /题量\s*[:：]|满分\s*[:：]|\d+\s*题\s*\/|单选题|多选题|判断题/.test(pageText);
+    const isExamPage = looksLikeExamPage();
     const empty = IS_TOP && !hasVideo && !hasQuiz && !framePlaying && emptyText;
     return {
       empty,
@@ -1386,7 +2043,10 @@
           scanQuiz(false);
         } catch (_) {}
         try {
-          scanChapterQuiz();
+          solveChapterQuiz();
+        } catch (_) {}
+        try {
+          solveTextExam();
         } catch (_) {}
       }
       if (n % 3 === 0) {
@@ -1457,7 +2117,14 @@
     window.addEventListener('message', (e) => {
       const d = e.data;
       if (!d) return;
-      if (d.__cx === 'videoEnded') scheduleNext();
+      if (d.__cx === 'examGraded') {
+        examGradedChapter = currentChapterId() || location.href;
+        log('本章测验已批阅，切回「视频」标签继续看');
+        ensureVideoTab();
+      } else if (d.__cx === 'videoEnded') {
+        log('收到子框架的「该跳下一节」通知');
+        scheduleNext();
+      }
       else if (d.__cx === 'toast') toast(d.text, d.kind);
       else if (d.__cx === 'frameState') {
         Object.assign(lastFrameState, d.payload || {}, { at: Date.now() });
@@ -1558,7 +2225,7 @@
     videoTick();
   }
 
-  log('已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b134] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
