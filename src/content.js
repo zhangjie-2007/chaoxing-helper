@@ -322,6 +322,24 @@
   // 本章的章节测验已经是批阅状态（我的答案/本次成绩）时记下来，避免反复切过去
   let examGradedChapter = '';
 
+  // 本节任务点已完成（早就看过了）→ 别重看，直接跳
+  let completedTick = { chapter: '', n: 0 };
+
+  function skipIfAlreadyDone() {
+    if (!IS_TOP) return;
+    if (!cfg.enabled || !cfg.autoNext) return;
+    const key = currentChapterId() || location.href;
+    let done = false;
+    try { done = pageSaysCompleted(); } catch (_) {}
+    if (!done) { completedTick = { chapter: '', n: 0 }; return; }
+    if (completedTick.chapter !== key) completedTick = { chapter: key, n: 0 };
+    completedTick.n++;
+    if (completedTick.n === 3) {
+      log('本节任务点已完成（左上角那个绿标），直接跳下一节');
+      scheduleNext();
+    }
+  }
+
   function scheduleNext() {
     if (nextScheduled) { log('跳转已排队，本次忽略'); return; }
     if (!cfg.enabled) { log('不跳转：总开关是关的'); return; }
@@ -440,6 +458,32 @@
       if (tinted(el)) return true;
       if (el.parentElement && tinted(el.parentElement)) return true;
     } catch (_) {}
+    return false;
+  }
+
+  /** 本节任务点是不是已经完成了（左上角那个绿色「任务点已完成」） */
+  function pageSaysCompleted() {
+    const RE = /任务点已完成|已完成学习|学习已完成/;
+    const docs = [];
+    const push = (d) => {
+      if (!d || docs.includes(d)) return;
+      docs.push(d);
+    };
+    push(document);
+    for (let i = 0; i < docs.length && docs.length < 8; i++) {
+      const d = docs[i];
+      try {
+        for (const f of Array.from(d.querySelectorAll('iframe'))) {
+          try { if (f.contentDocument && f.contentDocument.body) push(f.contentDocument); } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    for (const d of docs) {
+      try {
+        const t = (d.body && d.body.innerText) || '';
+        if (RE.test(t)) return true;
+      } catch (_) {}
+    }
     return false;
   }
 
@@ -2208,6 +2252,12 @@
           ensureVideoTab();
         } catch (_) {}
       }
+      // 本节任务点早就完成了 → 别重看，直接跳过
+      if (n % 2 === 0 && cfg.enabled && cfg.autoNext) {
+        try {
+          skipIfAlreadyDone();
+        } catch (_) {}
+      }
       if (n % 5 === 0 && cfg.enabled && cfg.autoNext) {
         try {
           maybeSkipEmptyChapter();
@@ -2459,7 +2509,7 @@
     videoTick();
   }
 
-  log('[b144] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b145] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
