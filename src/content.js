@@ -329,11 +329,21 @@
     if (!IS_TOP) return;
     if (!cfg.enabled || !cfg.autoNext) return;
     const key = currentChapterId() || location.href;
-    let done = false;
-    try { done = pageSaysCompleted(); } catch (_) {}
-    if (!done) { completedTick = { chapter: '', n: 0 }; return; }
-    if (completedTick.chapter !== key) completedTick = { chapter: key, n: 0 };
+    let byText = false;
+    let byCatalog = false;
+    try { byText = pageSaysCompleted(); } catch (_) {}
+    try { byCatalog = currentCatalogDone(); } catch (_) {}
+    const done = byText || byCatalog;
+    if (!done) {
+      completedTick = { chapter: '', n: 0, told: false };
+      return;
+    }
+    if (completedTick.chapter !== key) completedTick = { chapter: key, n: 0, told: false };
     completedTick.n++;
+    if (!completedTick.told) {
+      completedTick.told = true;
+      log('本节已完成的判据：页面文字=' + (byText ? '是' : '否') + ' 目录打勾=' + (byCatalog ? '是' : '否'));
+    }
     if (completedTick.n === 3) {
       log('本节任务点已完成（左上角那个绿标），直接跳下一节');
       scheduleNext();
@@ -480,11 +490,33 @@
     }
     for (const d of docs) {
       try {
-        const t = (d.body && d.body.innerText) || '';
-        if (RE.test(t)) return true;
+        const b = d.body;
+        if (!b) continue;
+        if (RE.test(b.innerText || '') || RE.test(b.textContent || '')) return true;
       } catch (_) {}
     }
     return false;
+  }
+
+  /** 目录里"当前这一节"是否已经打过完成勾 */
+  function currentCatalogDone() {
+    try {
+      const items = catalogItems();
+      if (!items.length) return false;
+      const inf = items.map((el) => {
+        let name = '';
+        try { name = cleanText((el.querySelector('.posCatalog_name') || el).textContent || ''); } catch (_) {}
+        return { el, name, done: itemDone(el) };
+      });
+      const sec = pageSectionName();
+      if (sec) {
+        const hit = inf.find((x) => x.name && (x.name.includes(sec) || sec.includes(x.name)));
+        if (hit) return !!hit.done;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   /** 页面上那个大标题（小节名），用于在目录里对号入座 */
@@ -2509,7 +2541,7 @@
     videoTick();
   }
 
-  log('[b145] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b146] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
