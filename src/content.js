@@ -790,16 +790,26 @@
     }
 
     const usable = (x) => x && !x.done && !x.isGroup;
-    let pool = info.filter((x) => x.i > curIdx && usable(x));
-    if (!pool.length) pool = info.filter((x) => x.i < Math.max(curIdx, 0) && usable(x));
-    if (!pool.length) return { ok: false, reason: '后面的小节看起来都已完成' };
+    // 只在"当前项之后"找下一节。以前后面找不到会回绕到前面的小节，
+    // 结果就是用户看到的"跳了一下又跳回去"——宁可不跳，也绝不倒退。
+    const pool = info.filter((x) => x.i > curIdx && usable(x));
+    if (!pool.length) {
+      log('后面已经没有未完成的小节了（当前第 ' + (curIdx + 1) + ' / ' + info.length + ' 项），不跳');
+      return { ok: false, reason: '后面的小节看起来都已完成' };
+    }
     const target = pickNextTarget(pool);
+    if (target.i <= curIdx) {
+      log('算出来的目标在当前项之前，拒绝回跳');
+      return { ok: false, reason: '目标在当前项之前' };
+    }
 
     log('下一节：' + target.name + '（编号 ' + (target.num || '?') + ' / 章节 ' + (target.id || '?') + '）');
     const ok = await navigateTo(target.el);
+    if (ok) navLockUntil = Date.now() + 20000;
     return ok ? { ok: true, how: '目录「' + target.name + '」' } : { ok: false, reason: '点了目录没反应（' + target.name + '）' };
   }
 
+  let navLockUntil = 0;
   const examNavTick = { chapter: '', opened: false };
 
   /** 本章还有没做的章节测验吗（同一章只主动切一次，避免来回切） */
@@ -822,6 +832,11 @@
   }
 
   async function goNext(manual) {
+    const nowTs = Date.now();
+    if (!manual && nowTs < navLockUntil) {
+      log('刚跳过一次（' + Math.ceil((navLockUntil - nowTs) / 1000) + ' 秒内），这次不重复跳');
+      return { ok: false, reason: 'nav-lock' };
+    }
     log('开始跳下一节（' + (manual ? '手动' : '自动') + '）chapterId=' + (currentChapterId() || '(无)'));
     if (!manual) {
       if (!cfg.enabled) return { ok: false, reason: '插件已关闭' };
@@ -867,6 +882,7 @@
       clickEl(direct);
       log('点击下一节按钮', label0 || '(无文字)');
       if (await waitNavigated(before0, 6000)) {
+        navLockUntil = Date.now() + 20000;
         return { ok: true, how: '下一节按钮' + (label0 ? '「' + label0 + '」' : '') };
       }
       log('下一节按钮点了没动，改走目录');
@@ -884,6 +900,7 @@
       clickEl(btn);
       log('点击下一节按钮', label || '(无文字)');
       if (await waitNavigated(beforeKey, 6000)) {
+        navLockUntil = Date.now() + 20000;
         return { ok: true, how: '下一节按钮' + (label ? '「' + label + '」' : '') };
       }
       log('点了下一节按钮但页面没动');
@@ -2634,7 +2651,7 @@
     videoTick();
   }
 
-  log('[b156] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b157] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
