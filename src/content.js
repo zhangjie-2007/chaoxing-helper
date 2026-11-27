@@ -293,6 +293,8 @@
   }
 
   let videoTimer = null;
+  const alreadyEnded = new WeakSet();
+
   function videoTick() {
     let vids = [];
     try {
@@ -300,6 +302,17 @@
     } catch (_) {}
     for (const v of vids) attachVideo(v);
     applyVideoPrefs();
+    // 打开页面时视频就已经在结尾（这节之前看完了）——也要往下走，否则一直停着
+    for (const v of vids) {
+      try {
+        const d = v.duration;
+        if (!d || !isFinite(d) || d < 5) continue;
+        if (v.currentTime < d - 1.5) continue;
+        if (alreadyEnded.has(v)) continue;
+        alreadyEnded.add(v);
+        markEnded('打开时已在结尾');
+      } catch (_) {}
+    }
   }
 
   /* ================================================================== *
@@ -310,8 +323,9 @@
   let examGradedChapter = '';
 
   function scheduleNext() {
-    if (nextScheduled) return;
-    if (!cfg.enabled || !cfg.autoNext) return;
+    if (nextScheduled) { log('跳转已排队，本次忽略'); return; }
+    if (!cfg.enabled) { log('不跳转：总开关是关的'); return; }
+    if (!cfg.autoNext) { log('不跳转：自动下一节开关是关的'); return; }
     nextScheduled = true;
     const delay = Math.max(800, Number(cfg.nextDelay) || 3000);
     log('将在 ' + Math.round(delay / 1000) + 's 后跳转下一节');
@@ -345,7 +359,19 @@
       if (!visible(el)) continue;
       if (el.querySelector('a, button')) continue; // 只要叶子节点，别点到整块容器
       const t = cleanText(el.textContent || '');
-      if (t && t.length <= 6 && NEXT_TEXT_RE.test(t)) return el;
+      if (t && t.length <= 6 && NEXT_TEXT_RE.test(t)) {
+        // 文字所在的 div 本身往往不响应点击，往上找一层真正可点的
+        let cur = el;
+        for (let up = 0; up < 3 && cur.parentElement; up++) {
+          const p = cur.parentElement;
+          const tag = (p.tagName || '').toLowerCase();
+          if (tag === 'a' || tag === 'button' || tag === 'li' || p.onclick || /btn|next/i.test(String(p.className || ''))) {
+            return p;
+          }
+          cur = p;
+        }
+        return el;
+      }
       const title = cleanText(el.getAttribute('title') || el.getAttribute('aria-label') || '');
       if (title && NEXT_TEXT_RE.test(title)) return el;
     }
@@ -401,8 +427,38 @@
       if (/(^|[\s_-])(active|cur|current|selected|on)([\s_-]|$)/i.test(cls)) return true;
       if (/^cur/i.test(el.id || '')) return true;
       if (el.querySelector('.icon_Current, .icon_current, #cur')) return true;
+      // 学习通的"当前小节"经常只靠背景色高亮：取自身与上一层的底色判断
+      const tinted = (node) => {
+        try {
+          const bg = getComputedStyle(node).backgroundColor || '';
+          const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+          if (!m) return false;
+          const [r, g, b] = [Number(m[1]), Number(m[2]), Number(m[3])];
+          return b > 180 && b - r > 30 && b - g > 15; // 明确的偏蓝浅底（绿底/白底不算）
+        } catch (_) { return false; }
+      };
+      if (tinted(el)) return true;
+      if (el.parentElement && tinted(el.parentElement)) return true;
     } catch (_) {}
     return false;
+  }
+
+  /** 页面上那个大标题（小节名），用于在目录里对号入座 */
+  function pageSectionName() {
+    const sels = [
+      '.chapter-title', '.video-title', '.playTitle', '.currentChapter',
+      '#chapterTitle', '.chapter_title', '.title-text', 'h1', '.under-title',
+    ];
+    for (const sel of sels) {
+      let list = [];
+      try { list = Array.from(document.querySelectorAll(sel)); } catch (_) { continue; }
+      for (const el of list) {
+        if (!visible(el)) continue;
+        const t = cleanText(el.textContent || '');
+        if (t.length >= 4 && t.length <= 40 && !/章节详情|返回课程|讨论|笔记|标注|目录/.test(t)) return t;
+      }
+    }
+    return '';
   }
 
   function catalogItems() {
@@ -479,9 +535,16 @@
   /** 点完之后等一会儿，看 chapterId / URL 有没有变（学习通很多跳转是 ajax 换 iframe） */
   async function waitNavigated(beforeKey, timeout) {
     const step = 300;
+    const beforeTitle = pageSectionName();
     for (let waited = 0; waited < timeout; waited += step) {
       await sleep(step);
       if (currentKey() !== beforeKey) return true;
+      // 纯 JS 换小节时 URL 不变，但页面大标题会变
+      const t = pageSectionName();
+      if (beforeTitle && t && t !== beforeTitle) {
+        log('页面标题已变：「' + beforeTitle.slice(0, 12) + '」→「' + t.slice(0, 12) + '」');
+        return true;
+      }
     }
     return false;
   }
@@ -602,13 +665,38 @@
     );
 
     let curIdx = curId ? info.findIndex((x) => x.id && x.id === curId) : -1;
-    if (curIdx < 0) curIdx = info.findIndex((x) => x.active);
+    // 页面大标题就是当前小节名——拿它在目录里对号入座最准
+    const secName = pageSectionName();
+    if (curIdx < 0 && secName) {
+      const hits = info.map((x, i) => ({ x, i })).filter(({ x }) => x.name && (x.name.includes(secName) || secName.includes(x.name)));
+      if (hits.length === 1) curIdx = hits[0].i;
+      else if (hits.length > 1) {
+        const notDone = hits.filter(({ x }) => !x.done);
+        if (notDone.length === 1) curIdx = notDone[0].i;
+      }
+    }
+    if (curIdx < 0) {
+      const actives = info.map((x, i) => ({ x, i })).filter(({ x }) => x.active);
+      if (actives.length === 1) curIdx = actives[0].i;
+    }
     // 目录项没有 chapterId 时，靠页面标题里的编号（如 4.5）对号入座
     if (curIdx < 0) {
       const no = currentSectionNo();
       if (no) curIdx = info.findIndex((x) => x.num && x.num === no);
     }
-    if (curIdx < 0) curIdx = info.findIndex((x) => !x.done) - 1;
+    if (curIdx < 0) {
+      // 再用"目录项文字里包含页面标题"来对号入座（有些皮肤没有 active 类、编号也不在行首）
+      let title = '';
+      try { title = cleanText(document.title || '').replace(/[_\-|].*$/, ''); } catch (_) {}
+      if (title && title.length >= 4) {
+        curIdx = info.findIndex((x) => x.name && (x.name.includes(title) || title.includes(x.name)));
+      }
+    }
+    if (curIdx < 0) {
+      // 认不出当前在哪一节，就别按"第一个未完成"瞎猜（会把课程从头再放一遍）
+      log('认不出当前小节在目录里的位置，不敢乱点目录');
+      return { ok: false, reason: '认不出当前小节（目录 ' + info.length + ' 项，active 一个都没有）' };
+    }
 
     const usable = (x) => x && !x.done && !x.isGroup;
     let pool = info.filter((x) => x.i > curIdx && usable(x));
@@ -643,6 +731,7 @@
   }
 
   async function goNext(manual) {
+    log('开始跳下一节（' + (manual ? '手动' : '自动') + '）chapterId=' + (currentChapterId() || '(无)'));
     if (!manual) {
       if (!cfg.enabled) return { ok: false, reason: '插件已关闭' };
       if (!cfg.autoNext) return { ok: false, reason: '自动下一节开关是关的' };
@@ -655,8 +744,17 @@
         examNavTick.chapter = currentChapterId() || location.href;
         examNavTick.opened = true;
         clickHard(tab);
-        log('本节看完了，先切到「章节测验」把题做掉');
-        setTimeout(() => {
+        await sleep(1200);
+        let switched = false;
+        try {
+          switched = tabItems().some(
+            (el) => /章节测验|章节测试/.test(cleanText(el.textContent || '')) && isActiveish(el)
+          );
+        } catch (_) {}
+        log('本节看完了，先切到「章节测验」把题做掉（切换成功=' + (switched ? '是' : '否') + '）');
+        if (!switched) {
+          log('「章节测验」标签没切过去，改为直接跳下一节');
+        } else setTimeout(() => {
           let t = '';
           try {
             t = cleanText((document.body && document.body.innerText) || '');
@@ -666,7 +764,7 @@
             scheduleNext();
           }
         }, 9000);
-        return { ok: true, how: '先做章节测验' };
+        if (switched) return { ok: true, how: '先做章节测验' };
       }
     }
 
@@ -1771,12 +1869,13 @@
         toast('章节测验已作答并提交', 'ok');
         log('本章测验做完了，稍后自动进入下一节');
         setTimeout(() => {
+          log('交卷后 4s：准备继续，IS_TOP=' + (IS_TOP ? 'yes' : 'no'));
           if (IS_TOP) scheduleNext();
           else {
             try {
               window.top.postMessage({ __cx: 'videoEnded' }, '*');
               log('已通知顶层去点「下一节」');
-            } catch (_) {}
+            } catch (e) { log('通知顶层失败：' + e); }
           }
         }, 4000);
       } else {
@@ -1907,22 +2006,33 @@
   }
 
   /** 学习目标/章测这类"有内容但没有视频"的标签页，帮用户切到「视频」 */
-  function ensureVideoTab() {
+  function ensureVideoTab(force) {
     if (!IS_TOP) return;
     if (!cfg.enabled || !cfg.autoNext) return;
     if (pageHasVideo()) return;
     // 章节测验页不要去"切视频标签"——那会把用户正在做的卷子切走
-    if (looksLikeExamPage() && examGradedChapter !== (currentChapterId() || location.href)) return;
-    // 用户刚自己点过页面（比如手动切了标签），60 秒内不抢
-    if (Date.now() - lastTrustedPointer < 60000) return;
+    if (!force && looksLikeExamPage() && examGradedChapter !== (currentChapterId() || location.href)) return;
+    // 用户刚自己点过页面（比如手动切了标签），60 秒内不抢；force 时例外（那是我们自己判定该切了）
+    if (!force && Date.now() - lastTrustedPointer < 60000) {
+      log('暂不切视频标签：你刚点过页面，60s 内不抢');
+      return;
+    }
     const cid = currentChapterId() || location.href;
-    if (videoTabTick.id !== cid) videoTabTick = { id: cid, tried: '' };
-    if (videoTabTick.tried === cid) return;
+    if (!force) {
+      if (videoTabTick.id !== cid) videoTabTick = { id: cid, tried: '' };
+      if (videoTabTick.tried === cid) return;
+    }
     const tabs = videoTabCandidates();
-    if (!tabs.length) return;
+    if (!tabs.length) {
+      log('没找到「视频」标签（候选 ' + tabs.length + ' 个）');
+      return;
+    }
     const target = tabs.find((el) => !itemActive(el));
-    if (!target) return; // 已经在视频标签上了
-    videoTabTick.tried = cid;
+    if (!target) {
+      log('已经在「视频」标签上了');
+      return;
+    }
+    videoTabTick = { id: cid, tried: cid };
     log('本节默认停在非视频标签，自动切到「视频」标签');
     clickEl(target);
   }
@@ -2120,7 +2230,7 @@
       if (d.__cx === 'examGraded') {
         examGradedChapter = currentChapterId() || location.href;
         log('本章测验已批阅，切回「视频」标签继续看');
-        ensureVideoTab();
+        ensureVideoTab(true);
       } else if (d.__cx === 'videoEnded') {
         log('收到子框架的「该跳下一节」通知');
         scheduleNext();
@@ -2130,6 +2240,84 @@
         Object.assign(lastFrameState, d.payload || {}, { at: Date.now() });
       }
     });
+  }
+
+  /** 只读诊断：把"下一节会怎么走"逐条写进日志，不做任何点击 */
+  function diagNext() {
+    const say = (t) => log('诊断·' + t);
+    say('当前 chapterId=' + (currentChapterId() || '(无)') + ' 页面有视频=' + (pageHasVideo() ? '是' : '否'));
+    say('题目标签待做=' + (examTabPending() ? '是' : '否') + ' 本章测验已批阅=' + (examGradedChapter === (currentChapterId() || location.href) ? '是' : '否'));
+    let idx = 0;
+    for (const sel of NEXT_BUTTONS) {
+      let list = [];
+      try { list = Array.from(document.querySelectorAll(sel)); } catch (_) { continue; }
+      for (const el of list) {
+        if (idx++ >= 8) break;
+        const t = cleanText(el.textContent || '').slice(0, 18);
+        const cls = (el.className && String(el.className).slice(0, 30)) || '';
+        say('按钮候选 ' + sel + ' → <' + el.tagName.toLowerCase() + '> "' + t + '" .' + cls + ' 可见=' + (visible(el) ? '是' : '否'));
+      }
+    }
+    if (!idx) say('按钮候选：一个都没匹配到（NEXT_BUTTONS 全部落空）');
+    const byText = findNextByText();
+    say('按文字找「下一节」→ ' + (byText ? '<' + byText.tagName.toLowerCase() + '> "' + cleanText(byText.textContent || '').slice(0, 18) + '" 可见=' + (visible(byText) ? '是' : '否') : '没找到'));
+    const items = catalogItems();
+    say('目录项 ' + items.length + ' 个');
+    if (items.length) {
+      const inf = items.map((el) => {
+        let name = '';
+        try { name = cleanText((el.querySelector('.posCatalog_name') || el).textContent || '').slice(0, 24); } catch (_) {}
+        const num = ((cleanText(el.textContent || '').match(/^(\d+(?:\.\d+)*)/) || [])[1]) || '';
+        return { el, name, num, active: itemActive(el), done: itemDone(el) };
+      });
+      const cur = currentChapterId();
+      const no = currentSectionNo();
+      let title = '';
+      try { title = cleanText(document.title || '').replace(/[_\-|].*$/, ''); } catch (_) {}
+      const byActive = inf.findIndex((x) => x.active);
+      const byNum = no ? inf.findIndex((x) => x.num && x.num === no) : -1;
+      const byTitle = title && title.length >= 4 ? inf.findIndex((x) => x.name && (x.name.includes(title) || title.includes(x.name))) : -1;
+      // 标题候选：看看页面上到底哪些元素像是"小节名"
+    let hCount = 0;
+    for (const sel of ['h1', 'h2', '.chapter-title', '.video-title', '.playTitle', '.currentChapter', '#chapterTitle', '.chapter_title', '.under-title', '.title', '.mark_title']) {
+      let list = [];
+      try { list = Array.from(document.querySelectorAll(sel)); } catch (_) { continue; }
+      for (const el of list) {
+        if (!visible(el)) continue;
+        if (hCount++ >= 3) break;
+        const t = cleanText(el.textContent || '').slice(0, 16);
+        if (!t) continue;
+        say('标题候选 ' + sel + ' → <' + el.tagName.toLowerCase() + '> "' + t + '" .' + String(el.className || '').slice(0, 24));
+      }
+      if (hCount >= 3) break;
+    }
+    if (!hCount) say('标题候选：全都没匹配到');
+    say('页面大标题="' + (pageSectionName() || '(没取到)').slice(0, 20) + '"');
+    // 目录里"非白底"的行（学习通靠底色标当前行）
+    let bgCount = 0;
+    try {
+      const rows = catalogItems().slice(0, 20);
+      for (let i = 0; i < rows.length; i++) {
+        const el = rows[i];
+        const bg = getComputedStyle(el).backgroundColor || '';
+        const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/);
+        const alpha = m && m[4] !== undefined ? Number(m[4]) : 1;
+        const white = !m || (Number(m[1]) > 250 && Number(m[2]) > 250 && Number(m[3]) > 250) || alpha === 0;
+        if (white) continue;
+        if (bgCount++ >= 3) break;
+        say('彩色行 #' + i + ' "' + cleanText(el.textContent || '').slice(0, 12) + '" ' + bg + ' cls=' + String(el.className || '').slice(0, 18));
+      }
+    } catch (_) {}
+    if (!bgCount) say('目录里没有非白底的行（当前行不是靠底色标记）');
+      say('认当前项：active→' + byActive + ' 编号(' + (no || '?') + ')→' + byNum + ' 标题(' + (title || '?').slice(0, 10) + ')→' + byTitle + ' chapterId=' + (cur || '无'));
+      const hit = byActive >= 0 ? byActive : byNum >= 0 ? byNum : byTitle;
+      say('生效的定位=' + hit + (hit >= 0 ? ' 命中「' + inf[hit].name + '」编号 ' + (inf[hit].num || '?') + ' 已完成=' + (inf[hit].done ? '是' : '否') : '（认不出）'));
+      if (hit >= 0) {
+        const nx = inf.slice(hit + 1).find((x) => !x.done);
+        say('下一个未完成=' + (nx ? '「' + nx.name + '」编号 ' + (nx.num || '?') : '（后面都完成了）'));
+      }
+    }
+    say('完');
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -2147,6 +2335,11 @@
         broadcastScan();
         scanQuiz(true).then(() => sendResponse({ ok: true, sig: lastQuizSig }));
         return true;
+      }
+      if (msg.cmd === 'diagNext') {
+        diagNext();
+        sendResponse({ ok: true });
+        return;
       }
       if (msg.cmd === 'clearLogs') {
         logs.length = 0;
@@ -2225,7 +2418,7 @@
     videoTick();
   }
 
-  log('[b134] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b142] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };

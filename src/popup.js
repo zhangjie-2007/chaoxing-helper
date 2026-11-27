@@ -258,6 +258,13 @@ $('btnNext').addEventListener('click', async () => {
   setTimeout(refresh, 1200);
 });
 
+$('btnDiagNext').addEventListener('click', async () => {
+  const r = await sendToTab({ type: 'cmd', cmd: 'diagNext' });
+  if (!r || r.__err) $('pageHint').textContent = '无法执行：请确认在课程学习页';
+  else $('pageHint').textContent = '已把"下一节会怎么走"写进日志（不点任何东西）。';
+  setTimeout(refresh, 1200);
+});
+
 $('btnScan').addEventListener('click', async () => {
   const r = await sendToTab({ type: 'cmd', cmd: 'scanQuiz' });
   if (!r || r.__err) $('pageHint').textContent = '无法执行：请确认在课程学习页';
