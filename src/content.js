@@ -345,7 +345,12 @@
           n = els.length;
           m = els.filter((el) => itemActive(el)).length;
         } catch (_) {}
-        log('本节完成检测（未跳过）：文字=' + (byText ? '是' : '否') + ' 目录=' + (byCatalog ? '是' : '否') + ' 目录项=' + n + ' active行=' + m + ' 标题="' + (pageSectionName() || '?').slice(0, 12) + '"');
+        let curTxt = '';
+        try {
+          const a = catalogItems().filter((el) => itemActive(el));
+          if (a.length === 1) curTxt = cleanText(a[0].textContent || '').slice(0, 16);
+        } catch (_) {}
+        log('本节完成检测（未跳过）：文字=' + (byText ? '是' : '否') + ' 目录=' + (byCatalog ? '是' : '否') + ' 目录项=' + n + ' active行=' + m + ' 当前行="' + curTxt + '" 标题="' + (pageSectionName() || '?').slice(0, 12) + '"');
         completedTick = { chapter: key, n: 0, told: true };
       }
       return;
@@ -464,10 +469,12 @@
   function itemActive(el) {
     try {
       const cls = typeof el.className === 'string' ? el.className : '';
-      if (/(^|[\s_-])(active|cur|current|selected|on)([\s_-]|$)/i.test(cls)) return true;
-      if (/_active\b|\bactive_|catalog_active/i.test(cls)) return true; // 学习通：posCatalog_select posCatalog_active
-      if (/^cur/i.test(el.id || '')) return true;
-      if (el.querySelector('.icon_Current, .icon_current, #cur')) return true;
+      // 学习通目录：当前行 = "posCatalog_select posCatalog_active"
+      if (/(^|\s)posCatalog_active(\s|$)/.test(cls)) return true;
+      // 其它站点/其它版本：只认"整词"，不做子串匹配（子串会把 posCatalog_select 之类全算上，
+      // 实测曾一次匹配 50/61 行，等于没有当前行）
+      if (/(^|\s)(active|cur|current|selected|currentNode)(\s|$)/i.test(cls)) return true;
+      if (/(^|\s)(active|cur)(Node)?(_|$)/i.test(cls) && !/select/i.test(cls)) return true;
       // 注意：别用"背景色偏蓝"来判断当前行——已完成的绿色行会被误命中，
       // 曾经因此把"当前项"错认成 1.1，跳节直接跳回课程开头。
     } catch (_) {}
@@ -2594,7 +2601,7 @@
     videoTick();
   }
 
-  log('[b153] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b154] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
