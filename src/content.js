@@ -495,6 +495,10 @@
         if (RE.test(b.innerText || '') || RE.test(b.textContent || '')) return true;
       } catch (_) {}
     }
+    // 子框架自己上报的（读不到 iframe 时就靠这个）
+    try {
+      if (lastFrameState && lastFrameState.completedText && Date.now() - (lastFrameState.at || 0) < 15000) return true;
+    } catch (_) {}
     return false;
   }
 
@@ -2037,7 +2041,7 @@
     // 子框架的日志也带上去，否则顶层弹窗里只看得到"已注入"一行
     const frameLogs = logs.slice(-6);
     try {
-      window.top.postMessage({ __cx: 'frameState', payload: { video, quizCount, stats, frameLogs, emptyHint } }, '*');
+      window.top.postMessage({ __cx: 'frameState', payload: { video, quizCount, stats, frameLogs, emptyHint, completedText } }, '*');
     } catch (_) {}
   }
 
@@ -2577,7 +2581,7 @@
     videoTick();
   }
 
-  log('[b148] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b149] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
