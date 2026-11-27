@@ -2416,6 +2416,29 @@
     }
     if (!hCount) say('标题候选：全都没匹配到');
     say('页面大标题="' + (pageSectionName() || '(没取到)').slice(0, 20) + '"');
+    // 已完成判据：分别看"页面文字"和"目录打勾"，并报各自看到了什么
+    try {
+      const byText = pageSaysCompleted();
+      const byCat = currentCatalogDone();
+      let topLen = 0;
+      let topHas = false;
+      try {
+        const t = (document.body && document.body.innerText) || '';
+        const tc = (document.body && document.body.textContent) || '';
+        topLen = t.length;
+        topHas = /任务点已完成/.test(t) || /任务点已完成/.test(tc);
+      } catch (_) {}
+      say('已完成判据：页面文字=' + (byText ? '是' : '否') + ' 目录打勾=' + (byCat ? '是' : '否') + ' 顶层可见字数=' + topLen + ' 顶层含该词=' + (topHas ? '是' : '否'));
+      // 数一数能读到的文档有几个
+      let docsN = 1;
+      let sandboxed = 0;
+      try {
+        for (const f of Array.from(document.querySelectorAll('iframe'))) {
+          try { if (f.contentDocument && f.contentDocument.body) docsN++; else sandboxed++; } catch (_) { sandboxed++; }
+        }
+      } catch (_) {}
+      say('可读文档=' + docsN + ' 读不到的 iframe=' + sandboxed + '（读不到就是被 sandbox 挡了）');
+    } catch (e) { say('判据检查出错：' + e); }
     // 目录里"非白底"的行（学习通靠底色标当前行）
     let bgCount = 0;
     try {
@@ -2541,7 +2564,7 @@
     videoTick();
   }
 
-  log('[b146] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b147] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
