@@ -1498,17 +1498,45 @@
       log('弹窗说还有没做完的题，但没找到「取消」，请你手动点取消');
       return 'cancel';
     }
+    // 候选：文字是"提交/确定"的最内层元素，再往上两层的容器也留着（有的按钮点位在父节点上）
+    const cands = [];
     for (const el of Array.from(scope.querySelectorAll('a, button, div, span'))) {
       if (!visible(el)) continue;
       const t = cleanText(el.textContent || '');
       if (!/^(提交|确定|确认|确定提交|确认提交|是的|是)$/.test(t)) continue;
       if (el.querySelector('a, button, div, span')) continue;
       if (el.closest('.TiMu, .questionLi, .question-item')) continue;
-      clickHard(el);
-      log('已确认提交弹窗「' + t + '」');
-      return 'ok';
+      cands.push({ el, t });
     }
-    return 'none';
+    if (!cands.length) return 'none';
+
+    // 点一版、看弹窗还在不在；还在就换"更外层/键盘回车"再试
+    for (const { el, t } of cands) {
+      for (const target of [el, el.parentElement, el.parentElement && el.parentElement.parentElement]) {
+        if (!target) continue;
+        clickHard(target);
+        await sleep(1100);
+        if (!examDialogRoot()) {
+          log('已确认提交弹窗「' + t + '」（点了 ' + target.tagName.toLowerCase() + '）');
+          return 'ok';
+        }
+      }
+      // 最后一招：聚焦后回车
+      try {
+        if (el.focus) el.focus();
+        const ev = (type, code) => new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+        el.dispatchEvent(ev('keydown'));
+        el.dispatchEvent(ev('keypress'));
+        el.dispatchEvent(ev('keyup'));
+        await sleep(1100);
+        if (!examDialogRoot()) {
+          log('已确认提交弹窗「' + t + '」（用回车）');
+          return 'ok';
+        }
+      } catch (_) {}
+    }
+    log('确认弹窗点了没反应，它还在（先别自动跳，免得白等）');
+    return 'stuck';
   }
 
   async function solveChapterQuiz() {
@@ -1858,6 +1886,11 @@
         return;
       }
       const verdict = await confirmExamSubmit();
+      if (verdict === 'stuck') {
+        textExamTick.last = Date.now() + 30000;
+        toast('交卷确认弹窗没点动，请手动点一下「提交」', 'warn');
+        return;
+      }
       if (verdict === 'cancel') {
         // 页面自己说还有没做完的题：取消掉，等一会儿再试，别硬交
         textExamTick.last = Date.now() + 45000;
@@ -2426,7 +2459,7 @@
     videoTick();
   }
 
-  log('[b143] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b144] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
