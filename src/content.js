@@ -444,7 +444,7 @@
       if (el.querySelector('.icon_Completed, .icon_completed, [class*="icon_Completed"], [class*="IconComplete"], .taskpoint-complete, .icon_taskpoint_complete')) return true;
       const cls = typeof el.className === 'string' ? el.className : '';
       if (/(^|[\s_-])(complete|completed|done|finish|finished)([\s_-]|$)/i.test(cls)) return true;
-      if (/已完成|已学完|已看完|已学过|已学习/.test(cleanText(el.textContent || ''))) return true;
+      if (/已完成|已学完|已看完|已学过|已学习|✓|✔/.test(cleanText(el.textContent || ''))) return true;
     } catch (_) {}
     return false;
   }
@@ -453,20 +453,11 @@
     try {
       const cls = typeof el.className === 'string' ? el.className : '';
       if (/(^|[\s_-])(active|cur|current|selected|on)([\s_-]|$)/i.test(cls)) return true;
+      if (/_active\b|\bactive_|catalog_active/i.test(cls)) return true; // 学习通：posCatalog_select posCatalog_active
       if (/^cur/i.test(el.id || '')) return true;
       if (el.querySelector('.icon_Current, .icon_current, #cur')) return true;
-      // 学习通的"当前小节"经常只靠背景色高亮：取自身与上一层的底色判断
-      const tinted = (node) => {
-        try {
-          const bg = getComputedStyle(node).backgroundColor || '';
-          const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-          if (!m) return false;
-          const [r, g, b] = [Number(m[1]), Number(m[2]), Number(m[3])];
-          return b > 180 && b - r > 30 && b - g > 15; // 明确的偏蓝浅底（绿底/白底不算）
-        } catch (_) { return false; }
-      };
-      if (tinted(el)) return true;
-      if (el.parentElement && tinted(el.parentElement)) return true;
+      // 注意：别用"背景色偏蓝"来判断当前行——已完成的绿色行会被误命中，
+      // 曾经因此把"当前项"错认成 1.1，跳节直接跳回课程开头。
     } catch (_) {}
     return false;
   }
@@ -502,20 +493,21 @@
     return false;
   }
 
-  /** 目录里"当前这一节"是否已经打过完成勾 */
+  /** 目录里"当前这一节"是否已经打过完成勾（学习通当前行类名是 posCatalog_active，行尾带 ✓） */
   function currentCatalogDone() {
     try {
       const items = catalogItems();
       if (!items.length) return false;
-      const inf = items.map((el) => {
-        let name = '';
-        try { name = cleanText((el.querySelector('.posCatalog_name') || el).textContent || ''); } catch (_) {}
-        return { el, name, done: itemDone(el) };
-      });
+      const actives = items.filter((el) => itemActive(el));
+      if (actives.length === 1) return itemDone(actives[0]);
+      // 认不出唯一当前行时，退回"用页面大标题对号入座"
       const sec = pageSectionName();
       if (sec) {
-        const hit = inf.find((x) => x.name && (x.name.includes(sec) || sec.includes(x.name)));
-        if (hit) return !!hit.done;
+        const hit = items.find((el) => {
+          const name = cleanText((el.querySelector('.posCatalog_name') || el).textContent || '');
+          return name && (name.includes(sec) || sec.includes(name));
+        });
+        if (hit) return itemDone(hit);
       }
       return false;
     } catch (_) {
@@ -2581,7 +2573,7 @@
     videoTick();
   }
 
-  log('[b149] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b150] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
