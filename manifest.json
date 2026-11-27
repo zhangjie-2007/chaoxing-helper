@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "学习通助手 · CX Helper",
-  "version": "1.4.10",
+  "version": "1.4.11",
   "description": "鼠标离开页面继续播放、视频弹题自动作答、播完自动跳下一节、章节测验整卷自动作答。仅供超星学习通使用。",
   "minimum_chrome_version": "111",
   "permissions": ["storage", "scripting", "activeTab"],

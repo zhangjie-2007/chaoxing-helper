@@ -1684,7 +1684,7 @@
    * 所以：按文字解析题目 -> 按文字找到选项节点 -> 点掉 -> 靠样式变化确认。
    * ---------------------------------------------------------------- */
   const EXAM_TAG_RE = /【\s*(多选题|单选题|判断题|填空题|简答题|论述题|名词解释)\s*】/;
-  let textExamTick = { last: 0, busy: false, done: '' };
+  let textExamTick = { last: 0, busy: false, done: '', blockedCh: '' };
 
   function examPlainText() {
     try {
@@ -1899,6 +1899,9 @@
     if (!qs.length) return;
     const key = location.href + '#' + qs.length;
     if (textExamTick.done === key) return;
+    // 已经试过但点不动（页面上还有"未做完"或确认框点不掉）→ 整章停手，别再每 15 秒重来一遍
+    // （重复点选项会把用户/自己已经选好的答案点掉，比不交更坏）
+    if (textExamTick.blockedCh && textExamTick.blockedCh === (currentChapterId() || location.href)) return;
     if (Date.now() - textExamTick.last < 15000) return;
 
     textExamTick.last = Date.now();
@@ -1959,14 +1962,16 @@
       }
       const verdict = await confirmExamSubmit();
       if (verdict === 'stuck') {
-        textExamTick.last = Date.now() + 30000;
-        toast('交卷确认弹窗没点动，请手动点一下「提交」', 'warn');
+        textExamTick.blockedCh = currentChapterId() || location.href;
+        toast('交卷确认弹窗点不动，这一章我先停手了，请你手动点「提交」', 'warn');
+        log('这一章的自动作答已停手（弹窗点不动），等你手动处理');
         return;
       }
       if (verdict === 'cancel') {
-        // 页面自己说还有没做完的题：取消掉，等一会儿再试，别硬交
-        textExamTick.last = Date.now() + 45000;
-        log('已取消提交（页面说还有没做完的题），稍后重试');
+        // 页面说"还有未做完的"——说明我点的选项没真选上；这一章停手，别反复点把答案点掉
+        textExamTick.blockedCh = currentChapterId() || location.href;
+        toast('这一章还有题没选上，自动作答先停手，请你手动补一下', 'warn');
+        log('这一章的自动作答已停手（页面说还有未做完的题，说明点选没生效）');
         return;
       }
       if (verdict === 'ok') {
@@ -2573,7 +2578,7 @@
     videoTick();
   }
 
-  log('[b150] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b151] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
