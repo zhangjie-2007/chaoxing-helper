@@ -1984,7 +1984,11 @@
         } catch (e) { log('通知顶层失败：' + e); }
       } else {
         textExamTick.done = key;
-        log('提交后没看到确认弹窗，可能已经交了（请看一眼页面）');
+        log('没看到确认弹窗，按已交处理，通知顶层继续');
+        try {
+          if (IS_TOP) examSubmittedTop();
+          else window.top.postMessage({ __cx: 'examSubmitted' }, '*');
+        } catch (e) { log('通知顶层失败：' + e); }
       }
     } catch (e) {
       log('文字版章节测验出错：' + ((e && e.message) || e));
@@ -2345,6 +2349,15 @@
         examGradedChapter = currentChapterId() || location.href;
         log('本章测验已批阅，切回「视频」标签继续看');
         ensureVideoTab(true);
+        // 测验已批阅 + 这章任务点也已完成 → 这章做完了，别停在这儿
+        setTimeout(() => {
+          try {
+            if (pageSaysCompleted() || currentCatalogDone()) {
+              log('本章测验已批阅且任务点已完成，继续下一节');
+              scheduleNext();
+            }
+          } catch (_) {}
+        }, 4000);
       } else if (d.__cx === 'videoEnded') {
         log('收到子框架的「该跳下一节」通知');
         scheduleNext();
@@ -2564,7 +2577,7 @@
     videoTick();
   }
 
-  log('[b147] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b148] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
