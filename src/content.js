@@ -2063,7 +2063,15 @@
       quizCount = collectQuizRoots().length;
     } catch (_) {}
     const emptyHint = hasEmptyHint();
-    if (!video && !quizCount && !emptyHint) return;
+    // 「任务点已完成」这个绿标常常只出现在某一个子框架里（顶层的 innerText 读不到，
+    // 被 sandbox 的 iframe 连 contentDocument 也读不到）。所以这一层看到就一定要上报，
+    // 否则顶层永远收不到"这一节已经做完"的信号 —— 就会把已看完的小节又重放一遍。
+    let completedText = '';
+    try {
+      const t = (document.body && (document.body.innerText || document.body.textContent)) || '';
+      if (/任务点已完成|已完成学习|学习已完成|已完成/.test(t) && t.length < 20000) completedText = 'yes';
+    } catch (_) {}
+    if (!video && !quizCount && !emptyHint && !completedText) return;
     // 反挂机的拦截统计发生在子框架的主世界里，顶层看不到，一起带上去
     const stats = {
       paused: mainState.paused || 0,
@@ -2651,7 +2659,7 @@
     videoTick();
   }
 
-  log('[b157] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b158] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
