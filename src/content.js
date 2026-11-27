@@ -507,7 +507,7 @@
     }
     // 子框架自己上报的（读不到 iframe 时就靠这个）
     try {
-      if (lastFrameState && lastFrameState.completedText && Date.now() - (lastFrameState.at || 0) < 15000) return true;
+      if (lastFrameState && lastFrameState.completedText && Date.now() - (lastFrameState.at || 0) < 30000) return true;
     } catch (_) {}
     return false;
   }
@@ -2071,8 +2071,12 @@
     // 否则顶层永远收不到"这一节已经做完"的信号 —— 就会把已看完的小节又重放一遍。
     let completedText = '';
     try {
-      const t = (document.body && (document.body.innerText || document.body.textContent)) || '';
-      if (/任务点已完成|已完成学习|学习已完成|已完成/.test(t) && t.length < 20000) completedText = 'yes';
+      const b = document.body;
+      const t = (b && (b.innerText || b.textContent)) || '';
+      // 不要加长度上限：那个显示绿标的框架正文可能很长，之前限定 <20000 字，
+      // 结果它的正文超了就被判成"没看到"，顶层于是以为本节没做完。
+      if (/任务点已完成|已完成学习|学习已完成|已完成/.test(t)) completedText = 'yes';
+      else if (/已完成/.test(document.title || '')) completedText = 'yes';
     } catch (_) {}
     if (!video && !quizCount && !emptyHint && !completedText) return;
     // 反挂机的拦截统计发生在子框架的主世界里，顶层看不到，一起带上去
@@ -2662,7 +2666,7 @@
     videoTick();
   }
 
-  log('[b159] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b160] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
