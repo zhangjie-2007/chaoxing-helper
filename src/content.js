@@ -324,6 +324,8 @@
 
   // 本节任务点已完成（早就看过了）→ 别重看，直接跳
   let completedTick = { chapter: '', n: 0 };
+  // 这一章一旦见过视频，就永远不许当空章节跳过（视频在子框架里，顶层可能一时看不到）
+  let sawVideoChapter = '';
 
   function skipIfAlreadyDone() {
     if (!IS_TOP) return;
@@ -2021,6 +2023,7 @@
     let video = null;
     try {
       const el = document.querySelector('video');
+      if (el) sawVideoChapter = currentChapterId() || location.href;
       if (el) {
         video = {
           paused: el.paused,
@@ -2183,11 +2186,13 @@
     const cid = currentChapterId() || location.href;
     if (emptyTick.id !== cid) emptyTick = { id: cid, n: 0, done: '', told: '' };
     if (emptyTick.done === cid) return;
+    // 本章见过视频（哪怕现在顶层看不到）→ 绝不当空章节处理
+    if (sawVideoChapter === cid) return;
     const probe = emptyChapterProbe();
     // 没有「暂无内容」提示、但确实既无视频又无题目、也不是章节测验页 —— 多半是
     // "学习目标"这类纯文字页；给它更长的观察时间（4 次 ≈24s），确认没视频再跳。
     const soft = !probe.empty && IS_TOP && !probe.hasVideo && !probe.hasQuiz && !probe.isExamPage && !pageHasVideo();
-    const need = probe.empty ? 2 : 4;
+    const need = probe.empty ? 2 : 6;
     if (!probe.empty && !soft) {
       emptyTick.n = 0;
       // 每个章节只解释一次，便于远程定位"为什么没跳过"
@@ -2376,6 +2381,7 @@
       else if (d.__cx === 'toast') toast(d.text, d.kind);
       else if (d.__cx === 'frameState') {
         Object.assign(lastFrameState, d.payload || {}, { at: Date.now() });
+        if (d.payload && d.payload.video) sawVideoChapter = currentChapterId() || location.href;
       }
     });
   }
@@ -2588,7 +2594,7 @@
     videoTick();
   }
 
-  log('[b152] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b153] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
