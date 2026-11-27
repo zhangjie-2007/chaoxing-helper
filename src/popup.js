@@ -258,6 +258,10 @@ $('btnNext').addEventListener('click', async () => {
   setTimeout(refresh, 1200);
 });
 
+$('btnReload').addEventListener('click', () => {
+  chrome.runtime.reload();
+});
+
 $('btnDiagNext').addEventListener('click', async () => {
   const r = await sendToTab({ type: 'cmd', cmd: 'diagNext' });
   if (!r || r.__err) $('pageHint').textContent = '无法执行：请确认在课程学习页';

@@ -1867,17 +1867,12 @@
       if (verdict === 'ok') {
         textExamTick.done = key;
         toast('章节测验已作答并提交', 'ok');
-        log('本章测验做完了，稍后自动进入下一节');
-        setTimeout(() => {
-          log('交卷后 4s：准备继续，IS_TOP=' + (IS_TOP ? 'yes' : 'no'));
-          if (IS_TOP) scheduleNext();
-          else {
-            try {
-              window.top.postMessage({ __cx: 'videoEnded' }, '*');
-              log('已通知顶层去点「下一节」');
-            } catch (e) { log('通知顶层失败：' + e); }
-          }
-        }, 4000);
+        log('本章测验做完了，通知顶层去点「下一节」');
+        try {
+          // 顶层活得比这个 iframe 久：交卷后本框架会被重建，定时器必须放在顶层
+          if (IS_TOP) examSubmittedTop();
+          else window.top.postMessage({ __cx: 'examSubmitted' }, '*');
+        } catch (e) { log('通知顶层失败：' + e); }
       } else {
         textExamTick.done = key;
         log('提交后没看到确认弹窗，可能已经交了（请看一眼页面）');
@@ -2009,7 +2004,8 @@
   function ensureVideoTab(force) {
     if (!IS_TOP) return;
     if (!cfg.enabled || !cfg.autoNext) return;
-    if (pageHasVideo()) return;
+    // force 是"我们自己判定该切了"（比如这章测验已批阅），此时别拿"别处有视频"当理由不动
+    if (!force && pageHasVideo()) return;
     // 章节测验页不要去"切视频标签"——那会把用户正在做的卷子切走
     if (!force && looksLikeExamPage() && examGradedChapter !== (currentChapterId() || location.href)) return;
     // 用户刚自己点过页面（比如手动切了标签），60 秒内不抢；force 时例外（那是我们自己判定该切了）
@@ -2227,7 +2223,10 @@
     window.addEventListener('message', (e) => {
       const d = e.data;
       if (!d) return;
-      if (d.__cx === 'examGraded') {
+      if (d.__cx === 'examSubmitted') {
+        log('收到子框架的「本章测验已交卷」通知');
+        examSubmittedTop();
+      } else if (d.__cx === 'examGraded') {
         examGradedChapter = currentChapterId() || location.href;
         log('本章测验已批阅，切回「视频」标签继续看');
         ensureVideoTab(true);
@@ -2240,6 +2239,15 @@
         Object.assign(lastFrameState, d.payload || {}, { at: Date.now() });
       }
     });
+  }
+
+  let examSubmittedAt = 0;
+  /** 测验交卷后：在顶层等 3s（页面会重渲染）再跳下一节 */
+  function examSubmittedTop() {
+    if (Date.now() - examSubmittedAt < 20000) return;
+    examSubmittedAt = Date.now();
+    log('等 3s（页面重渲染完）再跳下一节');
+    setTimeout(() => scheduleNext(), 3000);
   }
 
   /** 只读诊断：把"下一节会怎么走"逐条写进日志，不做任何点击 */
@@ -2418,7 +2426,7 @@
     videoTick();
   }
 
-  log('[b142] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b143] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
