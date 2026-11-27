@@ -2225,8 +2225,10 @@
    * 自动起播：换章节是整页刷新，浏览器"无手势不许自动播放"会把视频卡在 0 秒，
    * 学习通的播放器又是自定义 UI（play() 有时被它自己按回去），所以再补一次点击。
    * ------------------------------------------------------------------ */
-  let autostartTries = 0;
+  let autostartTries = 0;          // 仅用于日志节流，不再限制次数
+  let lastAutostartAt = 0;
   let lastTrustedPointer = 0;
+  let autostartLoggedAt = 0;
   try {
     document.addEventListener(
       'pointerdown',
@@ -2248,10 +2250,19 @@
     '[class*="playBtn"]',
   ];
 
+  /**
+   * 让"刚切到的新一节"自动播起来。
+   * 换章节时学习通会把页面/iframe 整个重建，而浏览器"没有用户手势"默认禁止自动播放，
+   * 于是视频卡在第 0 秒 —— 用户看到的就是"跳到下一节了但视频不走"。
+   * 这里在每一帧里都跑（视频在子框架里，顶层看不到 video 元素），
+   * 不限次数、每 3 秒最多试一次；用户 3 秒内自己点过页面就跳过（别抢他的暂停）。
+   */
   function tryAutostart() {
     if (!cfg.keepPlaying) return;
-    if (autostartTries >= 4) return;
-    if (Date.now() - lastTrustedPointer < 2000) return; // 用户刚动过，别抢
+    const now = Date.now();
+    if (now - lastTrustedPointer < 3000) return;
+    if (now - lastAutostartAt < 3000) return;
+
     let v = null;
     try {
       for (const el of document.querySelectorAll('video')) {
@@ -2262,14 +2273,35 @@
       }
     } catch (_) {}
     if (!v) return;
+
+    lastAutostartAt = now;
     autostartTries += 1;
+
+    // 1) 先点播放器自己的大按钮（学习通的播放器认这个）
     const btn = pickFirst(PLAY_BTN_SELECTORS, true);
-    if (btn) {
-      clickEl(btn);
-      log('自动起播：点了播放按钮');
-    } else {
-      clickEl(v);
-      log('自动起播：点了视频画面');
+    if (btn) clickEl(btn);
+
+    // 2) 再直接调 play()，被浏览器拦就静音重试（静音一定允许自动播）
+    try {
+      const p = v.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch(() => {
+          try {
+            v.muted = true;
+            const p2 = v.play();
+            if (p2 && typeof p2.catch === 'function') p2.catch(() => {});
+          } catch (_) {}
+        });
+      }
+    } catch (_) {}
+
+    if (now - autostartLoggedAt > 10000) {
+      autostartLoggedAt = now;
+      log(
+        '自动起播：' +
+          (btn ? '点了播放按钮' : '直接 play()') +
+          '（第 ' + autostartTries + ' 次，paused=' + v.paused + ' rate=' + v.playbackRate + '）'
+      );
     }
   }
 
@@ -2602,7 +2634,7 @@
     videoTick();
   }
 
-  log('[b155] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b156] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
