@@ -805,11 +805,12 @@
 
     log('下一节：' + target.name + '（编号 ' + (target.num || '?') + ' / 章节 ' + (target.id || '?') + '）');
     const ok = await navigateTo(target.el);
-    if (ok) navLockUntil = Date.now() + 20000;
+    if (ok) { navLockCh = curId || currentChapterId() || ''; navLockUntil = Date.now() + 20000; }
     return ok ? { ok: true, how: '目录「' + target.name + '」' } : { ok: false, reason: '点了目录没反应（' + target.name + '）' };
   }
 
   let navLockUntil = 0;
+  let navLockCh = ''; // 只拦同一节的重复跳，换到新节后立刻失效
   const examNavTick = { chapter: '', opened: false };
 
   /** 本章还有没做的章节测验吗（同一章只主动切一次，避免来回切） */
@@ -833,8 +834,10 @@
 
   async function goNext(manual) {
     const nowTs = Date.now();
-    if (!manual && nowTs < navLockUntil) {
-      log('刚跳过一次（' + Math.ceil((navLockUntil - nowTs) / 1000) + ' 秒内），这次不重复跳');
+    const hereCh = currentChapterId() || '';
+    // 只在还停在刚才跳走的那一节时才拦；跳到新节后照常判断（新节也许也是已完成，要允许继续跳）
+    if (!manual && nowTs < navLockUntil && hereCh && navLockCh && hereCh === navLockCh) {
+      log('刚跳过一次（' + Math.ceil((navLockUntil - nowTs) / 1000) + ' 秒内），这一节不重复跳');
       return { ok: false, reason: 'nav-lock' };
     }
     log('开始跳下一节（' + (manual ? '手动' : '自动') + '）chapterId=' + (currentChapterId() || '(无)'));
@@ -882,7 +885,7 @@
       clickEl(direct);
       log('点击下一节按钮', label0 || '(无文字)');
       if (await waitNavigated(before0, 6000)) {
-        navLockUntil = Date.now() + 20000;
+        navLockCh = hereCh; navLockUntil = Date.now() + 20000;
         return { ok: true, how: '下一节按钮' + (label0 ? '「' + label0 + '」' : '') };
       }
       log('下一节按钮点了没动，改走目录');
@@ -900,7 +903,7 @@
       clickEl(btn);
       log('点击下一节按钮', label || '(无文字)');
       if (await waitNavigated(beforeKey, 6000)) {
-        navLockUntil = Date.now() + 20000;
+        navLockCh = hereCh; navLockUntil = Date.now() + 20000;
         return { ok: true, how: '下一节按钮' + (label ? '「' + label + '」' : '') };
       }
       log('点了下一节按钮但页面没动');
@@ -2659,7 +2662,7 @@
     videoTick();
   }
 
-  log('[b158] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b159] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
