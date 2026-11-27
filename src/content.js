@@ -335,7 +335,17 @@
     try { byCatalog = currentCatalogDone(); } catch (_) {}
     const done = byText || byCatalog;
     if (!done) {
-      completedTick = { chapter: '', n: 0, told: false };
+      if (completedTick.chapter !== key || !completedTick.told) {
+        let n = 0;
+        let m = 0;
+        try {
+          const els = catalogItems();
+          n = els.length;
+          m = els.filter((el) => itemActive(el)).length;
+        } catch (_) {}
+        log('本节完成检测（未跳过）：文字=' + (byText ? '是' : '否') + ' 目录=' + (byCatalog ? '是' : '否') + ' 目录项=' + n + ' active行=' + m + ' 标题="' + (pageSectionName() || '?').slice(0, 12) + '"');
+        completedTick = { chapter: key, n: 0, told: true };
+      }
       return;
     }
     if (completedTick.chapter !== key) completedTick = { chapter: key, n: 0, told: false };
@@ -2578,7 +2588,7 @@
     videoTick();
   }
 
-  log('[b151] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
+  log('[b152] 已注入：' + (IS_TOP ? '顶层' : '子框架') + ' ' + location.host + location.pathname.slice(0, 60));
 
   // 供控制台调试
   window.__cx = { cfg, logs, goNext, scanQuiz, collectStatus, pickNextTarget, get lastSig() { return lastQuizSig; } };
